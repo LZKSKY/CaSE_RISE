@@ -1,10 +1,12 @@
 from Model.BertMLD import BertMLD
 from Model.pretrain_helper import get_model
-from config import quac_dataset_path, output_path
+from config_n import Config
 from dataset.MLDDataset import MLDDataset, train_edit_gen_fn, eval_fn
 import torch
 from Trainer.RLTrainer import RLTrainer
 import argparse
+config = Config()
+quac_dataset_path, output_path = config.quac_dataset_path, config.output_path
 
 
 def get_bert_model(args, pretrain=True):
@@ -55,8 +57,8 @@ def run_bert_generate(args):
     model_name = '-'.join([args.model_name, mode])
     collate_fn = train_edit_gen_fn
     # train_samples = torch.load(args.data_path + f'bert_iter_0.train.pkl')
-    dev_samples = torch.load(args.data_path + f'bert_iter_0.dev.pkl')
-    samples = dev_samples
+    test_samples = torch.load(args.data_path + f'bert_iter_0.test.pkl')
+    samples = test_samples
     train_size = len(samples)
     print('data size', train_size)
 
@@ -66,9 +68,9 @@ def run_bert_generate(args):
                         tune_lr=5e-5, tune_epoch=5, train_size=train_size, load_epoch=args.load_epoch)
     print('load model')
     # train_dataset = MLDDataset(samples=train_samples, tokenizer=tokenizer, data_type=mode)
-    dev_dataset = MLDDataset(samples=dev_samples, tokenizer=tokenizer, data_type=mode)
+    dev_dataset = MLDDataset(samples=test_samples, tokenizer=tokenizer, data_type=mode)
     trainer.train_type = mode
-    trainer.generate_mld(dev_dataset, collate_fn)
+    trainer.generate_mld(dev_dataset, collate_fn, f'{config.output_path}bert_mld-{args.load_epoch}_gen_out.pkl')
 
 
 if __name__ == '__main__':

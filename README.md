@@ -38,3 +38,15 @@
    1. forward
    2. generate
 2. 
+
+
+
+
+
+---
+
+#### 4. Predict model rather generate
+
+1. build vocab
+   1. insert phrase and all insert tokens
+   2.  

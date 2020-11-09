@@ -177,6 +177,14 @@ class RLTrainer:
         logger.info([' '.join(map(lambda x: str(x), info))])
         return effect_score
 
+    def gen_batch(self, batch_data):
+        if isinstance(batch_data, (tuple, list)):
+            batch_data, train_func = batch_data
+        else:
+            train_func = self.model.forward
+        output = train_func(batch_data, method='eval')
+        return output
+
     def gen_epoch(self, eval_dataset, eval_collate_fn, epoch=-1):
         self.model.eval()
         with torch.no_grad():
@@ -188,11 +196,11 @@ class RLTrainer:
                 for key, value in batch_data.items():
                     if isinstance(value, torch.Tensor):
                         batch_data[key] = batch_data[key].to(self.device)
-                seq = self.eval_batch((batch_data, self.model.generate_edit_gen))
-                seqs_arr.append(seq)
+                seq = self.gen_batch((batch_data, self.model.generate_edit_gen))
+                seqs_arr.extend(seq)
         elapsed_time = time() - start_time
         print(f'elapsed time: {elapsed_time}')
-        return
+        return seqs_arr
 
     def save_model(self, epoch):
         save_name = self.save_path + f'-{epoch}'
@@ -211,9 +219,9 @@ class RLTrainer:
             logger.info(f"Not find {save_name}")
 
     def train_mld(self, train_dataset, train_collate_fn, eval_dataset, eval_collate_fn):
+        logger.info(f"model_name {self.model_name} begin epoch {self.begin_epoch + 1}, max epoch {self.max_epoch}")
         for epoch in range(self.begin_epoch + 1, self.max_epoch):
-            logger.info(f"model_name {self.model_name} begin epoch {self.begin_epoch + 1}, max epoch {self.max_epoch}")
-            if self.tune_epoch > 0 and epoch == self.tune_epoch:
+            if epoch == self.tune_epoch:
                 for para in self.model.parameters():
                     para.requires_grad = True
                 self.set_optimizer(self.tune_lr)
@@ -223,11 +231,11 @@ class RLTrainer:
                 self.earlystopping(sum(score), self.model)
             self.save_model(epoch)
 
-    def generate_mld(self, eval_dataset, eval_collate_fn):
+    def generate_mld(self, eval_dataset, eval_collate_fn, gen_path):
         logger.info(f"generating sequence in epoch {self.load_epoch}")
         self.load_model(self.load_epoch)
-        self.gen_epoch(eval_dataset, eval_collate_fn)
-
+        gen_seqs = self.gen_epoch(eval_dataset, eval_collate_fn)
+        torch.save(gen_seqs, gen_path)
 
 
 

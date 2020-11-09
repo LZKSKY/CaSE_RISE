@@ -63,7 +63,7 @@ class TagSeq:
                 source_index += 1
                 target_index += 1
             elif ope == 's':
-                trajectory.append(Tag('S', [seq_a[source_index]]))
+                trajectory.append(Tag('S', [seq_b[target_index]]))
                 source_index += 1
                 target_index += 1
             elif ope == 'd':

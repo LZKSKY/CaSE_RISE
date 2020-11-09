@@ -6,6 +6,7 @@ from config_n import Config
 import numpy as np
 from Model.utils import pad
 from Model.MLD_gen_helper import generate
+from Model.utils import merge_path
 config = Config()
 min_num = 1e-8
 
@@ -124,7 +125,7 @@ class BertMLD(nn.Module):
         return seq_left_arr, seq2gen_arr,
 
     def edit2sequence_v1(self, edit_out: torch.Tensor, input_ids: torch.Tensor, encoder_attention_mask: torch.Tensor):
-        # let SDS = SSS
+        # let SDS = SSS; 但是预测出来还是烂的
         edit_out_prob = edit_out.softmax(dim=-1)
         edit_out_prob[:, :, 0] = 0.
         edit_label = edit_out_prob.argmax(dim=-1)
@@ -139,8 +140,9 @@ class BertMLD(nn.Module):
             seq_gen_i = []
             index_j = 0
             seq_l_ij = np.sum(seq != self.pad_token_id)
+            edit_path = merge_path(edit_label_numpy[index_i])
             while index_j < seq_l_ij:
-                edit_ij = self.id2edit[edit_label_numpy[index_i][index_j]]
+                edit_ij = self.id2edit[edit_path[index_j]]
                 if edit_ij == 'K':
                     seq_left_i.append(seq[index_j])
                     index_j += 1
@@ -154,7 +156,7 @@ class BertMLD(nn.Module):
                 elif edit_ij == 'S':
                     temp_arr = [seq[index_j]]
                     index_j += 1
-                    while index_j < seq_l_ij and self.id2edit[edit_label_numpy[index_i][index_j]] == 'S':
+                    while index_j < seq_l_ij and self.id2edit[edit_path[index_j]] == 'S':
                         temp_arr.append(seq[index_j])
                         index_j += 1
                     seq_gen_i.append(pad(temp_arr, self.pad_token_id, 5, padding_mode='l') + [self.bos_token_id])
@@ -205,16 +207,20 @@ class BertMLD(nn.Module):
         batch_size, in_seq_len, hidden_size = encoder_output.last_hidden_state.size()
         encoder_output.last_hidden_state = encoder_output.last_hidden_state.unsqueeze(dim=1).\
             expand(batch_size, insert_l, in_seq_len, hidden_size).contiguous().view(-1, in_seq_len, hidden_size)
-        seq_left_tensor = seq2gen_tensor.view(batch_size * insert_l, -1)
+        seq2gen_tensor = seq2gen_tensor.view(batch_size * insert_l, -1)
         encoder_attention_mask_expand = encoder_attention_mask.unsqueeze(dim=1).\
             expand(batch_size, insert_l, -1).contiguous().view(batch_size * insert_l, -1)
-        output_ids = generate(self.pretrain_model, input_ids=seq_left_tensor, encoder_outputs=encoder_output,
+        output_ids = generate(self.pretrain_model, input_ids=seq2gen_tensor, encoder_outputs=encoder_output,
                               max_length=20, attention_mask=encoder_attention_mask_expand)
         # ==================   gen final ids ======================================
         final_seqs = self.gen_final_ids(seq_left_arr, output_ids)
-        seqs = (self.ids2str(input_ids[0, 190:]), self.ids2str(final_seqs[0]), self.ids2str(data['query_true'][0]),
-                edit_out[:, 190:].softmax(dim=-1).argmax(dim=-1)[0])
-        return final_seqs
+        arr = []
+        for index in range(len(input_ids)):
+            keys = ['input_query', 'gen_query', 'output_query', 'edit_ids']
+            seqs = (self.ids2str(input_ids[index, 190:]), self.ids2str(final_seqs[index]),
+                    self.ids2str(data['query_true'][index]), edit_out[:, 190:].softmax(dim=-1).argmax(dim=-1)[index])
+            arr.append(dict(zip(keys, seqs)))
+        return arr
 
     def forward(self, data, method='train'):
         return self.do_edit_gen(data, method)

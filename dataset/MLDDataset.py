@@ -47,15 +47,15 @@ class MLDDataset(Dataset):
         label_arr = []
         for seq in gen_seq_arr:
             decoder_seq = seq[0]
-            decoder_label = [self.edit_pad_id] * len(decoder_seq)
+            decoder_label = [self.tokenizer.pad_token_id] * len(decoder_seq)
             decoder_seq.extend([self.tokenizer.bos_token_id] + seq[1])
             decoder_label.extend(seq[1] + [self.tokenizer.eos_token_id])
             decoder_seq = pad(decoder_seq, self.tokenizer.pad_token_id, self.max_gen_len)
-            decoder_label = pad(decoder_label, self.edit_pad_id, self.max_gen_len)
+            decoder_label = pad(decoder_label, self.tokenizer.pad_token_id, self.max_gen_len)
             seq_arr.append(decoder_seq)
             label_arr.append(decoder_label)
         seq_arr = pad(seq_arr, [self.tokenizer.pad_token_id] * self.max_gen_len, self.max_gen_num)
-        label_arr = pad(label_arr, [self.edit_pad_id] * self.max_gen_len, self.max_gen_num)
+        label_arr = pad(label_arr, [self.tokenizer.pad_token_id] * self.max_gen_len, self.max_gen_num)
         return seq_arr, label_arr
 
     def load_edit_gen(self):     # edit can do with gen
