@@ -25,6 +25,7 @@ class Config(object):
         self.path = path
         self.quac_path = f'{path}QuacN/processed/'
         self.quac_dataset_path = f'{path}QuacN/Dataset/'
+        self.tokenizer_path = f'{path}QuacN/Tokenizer/'
         self.baseline_dataset_path = f'{path}QuacN/BaselineDataset/'
         self.output_path = f'{path}QuacN/Output/'
         self.save_path = f'{path}QuacN/model/'

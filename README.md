@@ -37,7 +37,7 @@
 1. Model/BertMLD.py
    1. forward
    2. generate
-2. 
+2. Because it can not generate his, he, here, we address it as a classification task
 
 
 
@@ -45,8 +45,18 @@
 
 ---
 
-#### 4. Predict model rather generate
+#### ~~4. Predict model rather generate~~
 
-1. build vocab
-   1. insert phrase and all insert tokens
-   2.  
+1. ~~build vocab~~
+   1. ~~insert phrase and all insert tokens~~
+2. ~~define reward~~
+   1. ~~我们要减去baseline，不如，对于每个sample，每次存一个b~~
+   2. 
+
+
+
+#### 4. Generate path
+
+1. implement a DP path generated methods
+2. implement a action probability methods
+3. implement a final path generation methods

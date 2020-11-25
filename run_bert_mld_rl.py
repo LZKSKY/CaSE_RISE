@@ -1,7 +1,7 @@
 from Model.BertMLD import BertMLD
 from Model.pretrain_helper import get_model
 from config_n import Config
-from dataset.MLDDataset import MLDDataset, train_edit_gen_fn, eval_fn
+from dataset.MLDDataset_RL import MLDDatasetRL, train_edit_gen_fn, eval_fn
 import torch
 from Trainer.RLTrainer import RLTrainer
 import argparse
@@ -32,7 +32,6 @@ def run_bert_train(args):
     print('loading dataset')
     mode = args.mode
     model_name = '-'.join([args.model_name, mode])
-    collate_fn = train_edit_gen_fn
     train_samples = torch.load(args.data_path + f'bert_iter_0.train.pkl')
     dev_samples = torch.load(args.data_path + f'bert_iter_0.dev.pkl')
     samples = train_samples + dev_samples
@@ -43,11 +42,13 @@ def run_bert_train(args):
     trainer = RLTrainer(model=model, batch_size=batch_size, accumulation_steps=accumulation_steps,
                         model_name=model_name, ema_rate=0.995, max_epoch=max_epoch, initial_lr=5e-5,
                         tune_lr=5e-5, tune_epoch=5, train_size=train_size)
+    trainer.load_epoch(24)
+    trainer.set_save_path(model_name=model_name + '-RL')
     print('load model')
-    train_dataset = MLDDataset(samples=train_samples, tokenizer=tokenizer, phrase_tokenizer=phrase_tokenizer, data_type=mode)
-    dev_dataset = MLDDataset(samples=dev_samples, tokenizer=tokenizer, phrase_tokenizer=phrase_tokenizer, data_type=mode)
+    train_dataset = MLDDatasetRL(samples=train_samples, tokenizer=tokenizer, phrase_tokenizer=phrase_tokenizer, data_type=mode)
+    dev_dataset = MLDDatasetRL(samples=dev_samples, tokenizer=tokenizer, phrase_tokenizer=phrase_tokenizer, data_type=mode)
     trainer.train_type = mode
-    trainer.train_mld(train_dataset, collate_fn, dev_dataset, collate_fn)
+    trainer.train_mle(train_dataset, train_edit_gen_fn, dev_dataset, eval_fn)
 
 
 def run_bert_generate(args):
@@ -70,7 +71,7 @@ def run_bert_generate(args):
                         tune_lr=5e-5, tune_epoch=5, train_size=train_size, load_epoch=args.load_epoch)
     print('load model')
     # train_dataset = MLDDataset(samples=train_samples, tokenizer=tokenizer, data_type=mode)
-    dev_dataset = MLDDataset(samples=test_samples, tokenizer=tokenizer, phrase_tokenizer=phrase_tokenizer, data_type=mode)
+    dev_dataset = MLDDatasetRL(samples=test_samples, tokenizer=tokenizer, phrase_tokenizer=phrase_tokenizer, data_type=mode)
     trainer.train_type = mode
     trainer.generate_mld(dev_dataset, collate_fn, f'{config.output_path}bert_mld-{args.load_epoch}_gen_out.pkl')
 

@@ -10,12 +10,13 @@ from typing import List
 
 
 class MLDDataset(Dataset):
-    def __init__(self, samples=None, tokenizer=None, query_len=30, answer_len=30, n=1E10, context_len=3,
-                 max_candidate_num=20, sample_tensor=None, data_type='gen'):
+    def __init__(self, samples=None, tokenizer=None, phrase_tokenizer=None, query_len=30, answer_len=30, n=1E10,
+                 context_len=3, max_candidate_num=20, sample_tensor=None, data_type='gen'):
         super().__init__()
         self.samples = samples
         self.context_len = context_len
         self.max_candidate_num = max_candidate_num
+        self.phrase_tokenizer = phrase_tokenizer
         self.max_gen_len = 20
         self.max_gen_num = 5
 
@@ -41,7 +42,8 @@ class MLDDataset(Dataset):
             self.sample_tensor = sample_tensor
             self.len = len(self.sample_tensor)
 
-    def obtain_gen_label(self, tag_arr: List[Tag], input_query):
+    def obtain_gen_label_v1(self, tag_arr: List[Tag], input_query):
+        # seq insert
         gen_seq_arr = obtain_gen_seq(tag_arr, self.tokenizer.sep_token_id, input_query)
         seq_arr = []
         label_arr = []
@@ -56,6 +58,22 @@ class MLDDataset(Dataset):
             label_arr.append(decoder_label)
         seq_arr = pad(seq_arr, [self.tokenizer.pad_token_id] * self.max_gen_len, self.max_gen_num)
         label_arr = pad(label_arr, [self.tokenizer.pad_token_id] * self.max_gen_len, self.max_gen_num)
+        return seq_arr, label_arr
+
+    def obtain_gen_label(self, tag_arr: List[Tag], input_query):
+        # classification
+        gen_seq_arr = obtain_gen_seq(tag_arr, self.tokenizer.sep_token_id, input_query)
+        seq_arr = []
+        label_arr = []
+        for seq in gen_seq_arr:
+            decoder_seq = seq[0] + [self.tokenizer.cls_token_id]
+            # decoder_seq.extend([self.tokenizer.bos_token_id] + seq[1])
+            decoder_label = self.phrase_tokenizer.convert_token_to_id(seq[1])
+            decoder_seq = pad(decoder_seq, self.tokenizer.pad_token_id, self.max_gen_len, padding_mode='l')
+            seq_arr.append(decoder_seq)
+            label_arr.append(decoder_label)
+        seq_arr = pad(seq_arr, [self.tokenizer.pad_token_id] * self.max_gen_len, self.max_gen_num)
+        label_arr = pad(label_arr, 0, self.max_gen_num)
         return seq_arr, label_arr
 
     def load_edit_gen(self):     # edit can do with gen

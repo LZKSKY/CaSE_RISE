@@ -25,6 +25,7 @@ class TagSeq:
         self.del_cost = del_cost if hasattr(del_cost, '__call__') else self.get_func(del_cost)
 
     def get_edit_matrix(self, seq_a, seq_b):
+        # return matrix saving (cost, operations)
         n = len(seq_a)
         m = len(seq_b)
         d = [[(0, '') for j in range(0, m + 1)] for i in range(0, n + 1)]  # [n+1, m+1, 2]
@@ -53,6 +54,20 @@ class TagSeq:
                     )
         return d
 
+    def sample_path(self, matrix, seq_a, seq_b, greedy_prob=0.8):
+        trajectory = []
+        index_i, index_j = len(seq_a), len(seq_b)
+        ope_arr = []
+
+        while index_i > 0 and index_j > 0:
+            if matrix[index_i][index_j][1][-1] == 's':
+                ope_arr.insert(0, 'S')
+            else:
+                prob = (matrix[index_i - 1][index_j][0], matrix[index_i][index_j - 1][0],
+                        matrix[index_i - 1][index_j - 1][0])
+
+        return trajectory
+
     def get_path(self, matrix, seq_a, seq_b):
         trajectory = []
         source_index = 0
@@ -76,7 +91,7 @@ class TagSeq:
                 raise Exception('Unsupported operation')
         return trajectory
 
-    def merge_path(self, trajectory: List[Tag], needed_len: int):
+    def merge_path(self, trajectory: List[Tag], desired_len: int):
         pre_state = 'K'
 
         # change  "DSDKK" -> "SSSKK"
@@ -123,15 +138,27 @@ class TagSeq:
                 new_trajectory[-1].seq.extend(temp_cache)
             new_trajectory[-1].ope = 'I'
             # temp_cache = []
-        assert len(new_trajectory) == needed_len
+        assert len(new_trajectory) == desired_len
         return new_trajectory
 
-    def get_label(self, input_seq, output_seq):
+    def return_length(self, trajectory: List[Tag]):
+        length = 0
+        for tag in trajectory:
+            if tag.ope == 'S':
+                length += 1
+            elif tag.ope == 'I':
+                length += len(tag.seq)
+        return length
+
+    def get_label(self, input_seq, output_seq, return_length=False):
         # derived label from matrix
         matrix = self.get_edit_matrix(input_seq, output_seq)
         trajectory = self.get_path(matrix, input_seq, output_seq)
         new_trajectory = self.merge_path(trajectory, len(input_seq) + 1)
-        return new_trajectory
+        if return_length:
+            return new_trajectory, self.return_length(trajectory)
+        else:
+            return new_trajectory
 
 
 def obtain_gen_seq(tag_arr: List[Tag], sep_token_id, input_query):
@@ -140,7 +167,7 @@ def obtain_gen_seq(tag_arr: List[Tag], sep_token_id, input_query):
     gen_seq_arr = []
     while i < input_len:
         if tag_arr[i].ope == 'I':
-            gen_seq_arr.append(([input_query[i], sep_token_id, input_query[i + 1]], tag_arr[i].seq))
+            gen_seq_arr.append(([input_query[i], input_query[i + 1]], tag_arr[i].seq))
             i += 1
         elif tag_arr[i].ope == 'S':
             gen_seq_arr.append(([input_query[i]], tag_arr[i].seq))

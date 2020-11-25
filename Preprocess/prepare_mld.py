@@ -123,6 +123,7 @@ def extend_edit(quac_samples):
 
 
 def build_IS_vocab(quac_samples, tokenizer):
+    from Preprocess.PhraseTokenizer import PhraseTokenizer
     from collections import Counter
     c = Counter()
     sub_sig = 0     # for substitute, we can substitute for a long seq, so only count once is ok
@@ -141,15 +142,8 @@ def build_IS_vocab(quac_samples, tokenizer):
                     print()
                 if len(tag.seq) > 1:
                     c.update([' '.join(seq)])
-    pad_token_id = tokenizer.pad_token_id
-    unk_token_id = tokenizer.unk_token_id
-    vocab = [str(pad_token_id)] + [k for k, v in c.most_common(5000)]
-    if str(unk_token_id) not in vocab:
-        vocab = [str(unk_token_id)] + vocab
 
-    str2id = dict(zip(vocab, range(1, len(vocab) + 1)))
-    id2str = dict([(v, k) for k, v in str2id])
-    return vocab, str2id, id2str
+    return PhraseTokenizer(c, tokenizer)
 
 
 def preprocessing(tokenizer_path, tokenizer_name):
@@ -168,7 +162,8 @@ def preprocessing(tokenizer_path, tokenizer_name):
         quac_samples = check_duplicate(quac_samples)
         extend_edit(quac_samples)
         train_samples, dev_samples, test_samples = split_data(quac_path + 'quac.split', quac_samples)
-
+        phrase_tokenizer = build_IS_vocab(train_samples, tokenizer)
+        torch.save(phrase_tokenizer, config.tokenizer_path + f'{tokenizer_name}_phrase_tokenizer.pkl')
         # train_samples = check_duplicate(train_samples)
         # dev_samples = check_duplicate(dev_samples)
         # test_samples = check_duplicate(test_samples)
@@ -177,7 +172,8 @@ def preprocessing(tokenizer_path, tokenizer_name):
         torch.save(dev_samples, quac_dataset_path + f'{raw_name}.dev.pkl')
         torch.save(test_samples, quac_dataset_path + f'{raw_name}.test.pkl')
     # extend_edit(train_samples)
-    build_IS_vocab(train_samples, tokenizer)
+    # phrase_tokenizer = build_IS_vocab(train_samples, tokenizer)
+    # torch.save(phrase_tokenizer, config.tokenizer_path + f'{raw_name}_phrase_tokenizer.pkl')
     # extend_edit(dev_samples)
     # extend_edit(test_samples)
     # torch.save(train_samples, quac_dataset_path + f'{raw_name}.train.pkl')
