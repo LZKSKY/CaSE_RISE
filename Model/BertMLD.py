@@ -8,6 +8,7 @@ from Model.utils import pad
 from Model.MLD_gen_helper import generate
 from Model.utils import merge_path
 from Preprocess.PhraseTokenizer import PhraseTokenizer
+from typing import Dict
 config = Config()
 min_num = 1e-8
 
@@ -110,21 +111,19 @@ class BertMLD(nn.Module):
             else:
                 gen_loss = F.nll_loss(gen_out.log_softmax(dim=-1), decoder_label_expand, ignore_index=0,
                                       reduction='mean')     # []
-            return gen_out, gen_loss
+            return {'gen_out': gen_out, 'gen_loss': gen_loss}
         else:
-            return gen_out
+            return {'gen_out': gen_out}
 
-    def do_edit_gen(self, data, method=None):
+    def do_edit_gen(self, data, method='train', compute_loss=True, **kwargs):
         edit_out, edit_loss, encoder_output = self.edit_pred(data, method)
-        gen_out, gen_loss = self.seq_predict(data, encoder_output, compute_loss=True, method=method)
-        if method == 'train':
-            return (edit_out, gen_out), (edit_loss, gen_loss)
-        elif method == 'eval':
-            decoder_label = data['decoder_out_tensor']  # [b, l, s2]
-            edit_labels = data['edit_labels_tensor']  # [b, s1]
-            decoder_label_expand = decoder_label.contiguous().view(-1)
-            return {'edit_output': edit_out, 'edit_label': edit_labels, 'edit_loss': edit_loss,
-                    'gen_out': gen_out, 'gen_label': decoder_label_expand, 'gen_loss': gen_loss}
+        gen_dict: Dict = self.seq_predict(data, encoder_output, compute_loss=compute_loss, method=method)
+        decoder_label = data['decoder_out_tensor']  # [b, l, s2]
+        edit_labels = data['edit_labels_tensor']  # [b, s1]
+        decoder_label_expand = decoder_label.contiguous().view(-1)
+        gen_dict.update({'edit_output': edit_out, 'edit_label': edit_labels, 'edit_loss': edit_loss,
+                         'gen_label': decoder_label_expand})
+        return gen_dict
 
     def edit2sequence_v1(self, edit_out: torch.Tensor, input_ids: torch.Tensor, encoder_attention_mask: torch.Tensor):
         # let SDS = SSS; 但是预测出来还是烂的

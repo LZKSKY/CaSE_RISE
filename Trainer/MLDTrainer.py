@@ -250,65 +250,65 @@ class MLDTrainer:
         gen_seqs = self.gen_epoch(eval_dataset, eval_collate_fn)
         torch.save(gen_seqs, gen_path)
 
-    def eval_rl(self, eval_dataset: MLDDatasetRL, eval_collate_fn, epoch=-1):      # by R[s_0]
-        self.model.eval()
-        with torch.no_grad():
-            for i in range(4):
-                eval_loader = DataLoader(eval_dataset, collate_fn=eval_collate_fn, batch_size=self.batch_size * 2,
-                                         shuffle=True, pin_memory=False)
-                start_time = time()
-                gen_seqs_arr = []
-                for step, batch_data in tqdm(enumerate(eval_loader)):
-                    for key, value in batch_data.items():
-                        if isinstance(value, torch.Tensor):
-                            batch_data[key] = batch_data[key].to(self.device)
-                    gen_seqs = self.model.generate_edit_gen(batch_data, method=None)
-                    gen_seqs_arr.extend(gen_seqs)
-                elapsed_time = time() - start_time
-                eval_dataset.load_eval(gen_seqs_arr)
-        reward_score = eval_dataset.eval_reward()
-        info = ["Eval\t\t", 'Method', self.model_name, 'Epoch', epoch, 'Effect Score ', reward_score, 'Time ', elapsed_time]
-        logger.info([' '.join(map(lambda x: str(x), info))])
-        return reward_score
-
-    def prob_epoch(self, eval_dataset, eval_collate_fn, epoch=-1):
-        self.model.eval()
-        with torch.no_grad():
-            eval_loader = DataLoader(eval_dataset, collate_fn=eval_collate_fn, batch_size=self.batch_size * 2,
-                                     shuffle=False, pin_memory=False)
-            start_time = time()
-            result_arr = []
-            for step, batch_data in tqdm(enumerate(eval_loader)):
-                for key, value in batch_data.items():
-                    if isinstance(value, torch.Tensor):
-                        batch_data[key] = batch_data[key].to(self.device)
-                result = self.eval_batch((batch_data, self.model.forward))
-                result_arr.extend(result)
-        elapsed_time = time() - start_time
-
-        info = ["Eval\t\t", 'Method', self.model_name, 'ProbEpoch', epoch, 'Time ', elapsed_time]
-        logger.info([' '.join(map(lambda x: str(x), info))])
-        return result_arr
-
-    def extend_path(self, train_dataset: MLDDatasetRL, train_collate_fn, epoch=-1):
-        # first delete and then insert
-        self.model.eval()
-        train_dataset.obtain_data2delete()
-        self.method = 'train'
-        result = self.prob_epoch(train_dataset, train_collate_fn, epoch=epoch)
-
-    # TODO； implement train, eval, generate_sample, save_mid_data
-    def train_mle(self, train_dataset, train_collate_fn, eval_dataset, eval_collate_fn):
-        self.method = 'rl_train'
-        self.eval_rl(eval_dataset, eval_collate_fn, -1)
-        for e in range(self.rl_epoch):
-            self.method = 'rl_train'
-            self.train_epoch(train_dataset, train_collate_fn, e)
-            eval_score = self.eval_rl(eval_dataset, eval_collate_fn, e)
-            self.save_model(f'{e}-{eval_score}')
-            # TODO: check probability and reward, and decide whether to expand
-            self.extend_path(train_dataset, train_collate_fn, e)
-            torch.save(train_dataset, config.quac_dataset_path + f'bert_iter_{e + 1}.train.pkl')
+    # def eval_rl(self, eval_dataset: MLDDatasetRL, eval_collate_fn, epoch=-1):      # by R[s_0]
+    #     self.model.eval()
+    #     with torch.no_grad():
+    #         for i in range(4):
+    #             eval_loader = DataLoader(eval_dataset, collate_fn=eval_collate_fn, batch_size=self.batch_size * 2,
+    #                                      shuffle=True, pin_memory=False)
+    #             start_time = time()
+    #             gen_seqs_arr = []
+    #             for step, batch_data in tqdm(enumerate(eval_loader)):
+    #                 for key, value in batch_data.items():
+    #                     if isinstance(value, torch.Tensor):
+    #                         batch_data[key] = batch_data[key].to(self.device)
+    #                 gen_seqs = self.model.generate_edit_gen(batch_data, method=None)
+    #                 gen_seqs_arr.extend(gen_seqs)
+    #             elapsed_time = time() - start_time
+    #             eval_dataset.load_eval(gen_seqs_arr)
+    #     reward_score = eval_dataset.eval_reward()
+    #     info = ["Eval\t\t", 'Method', self.model_name, 'Epoch', epoch, 'Effect Score ', reward_score, 'Time ', elapsed_time]
+    #     logger.info([' '.join(map(lambda x: str(x), info))])
+    #     return reward_score
+    #
+    # def prob_epoch(self, eval_dataset, eval_collate_fn, epoch=-1):
+    #     self.model.eval()
+    #     with torch.no_grad():
+    #         eval_loader = DataLoader(eval_dataset, collate_fn=eval_collate_fn, batch_size=self.batch_size * 2,
+    #                                  shuffle=False, pin_memory=False)
+    #         start_time = time()
+    #         result_arr = []
+    #         for step, batch_data in tqdm(enumerate(eval_loader)):
+    #             for key, value in batch_data.items():
+    #                 if isinstance(value, torch.Tensor):
+    #                     batch_data[key] = batch_data[key].to(self.device)
+    #             result = self.eval_batch((batch_data, self.model.forward))
+    #             result_arr.extend(result)
+    #     elapsed_time = time() - start_time
+    #
+    #     info = ["Eval\t\t", 'Method', self.model_name, 'ProbEpoch', epoch, 'Time ', elapsed_time]
+    #     logger.info([' '.join(map(lambda x: str(x), info))])
+    #     return result_arr
+    #
+    # def extend_path(self, train_dataset: MLDDatasetRL, train_collate_fn, epoch=-1):
+    #     # first delete and then insert
+    #     self.model.eval()
+    #     train_dataset.obtain_data2delete()
+    #     self.method = 'train'
+    #     result = self.prob_epoch(train_dataset, train_collate_fn, epoch=epoch)
+    #
+    # # TODO； implement train, eval, generate_sample, save_mid_data
+    # def train_mle(self, train_dataset, train_collate_fn, eval_dataset, eval_collate_fn):
+    #     self.method = 'rl_train'
+    #     self.eval_rl(eval_dataset, eval_collate_fn, -1)
+    #     for e in range(self.rl_epoch):
+    #         self.method = 'rl_train'
+    #         self.train_epoch(train_dataset, train_collate_fn, e)
+    #         eval_score = self.eval_rl(eval_dataset, eval_collate_fn, e)
+    #         self.save_model(f'{e}-{eval_score}')
+    #         # TODO: check probability and reward, and decide whether to expand
+    #         self.extend_path(train_dataset, train_collate_fn, e)
+    #         torch.save(train_dataset, config.quac_dataset_path + f'bert_iter_{e + 1}.train.pkl')
 
 
 

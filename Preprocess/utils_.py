@@ -146,6 +146,8 @@ class TagSeq:
         for tag in trajectory:
             if tag.ope == 'S':
                 length += 1
+            elif tag.ope == 'D':
+                length += 1
             elif tag.ope == 'I':
                 length += len(tag.seq)
         return length

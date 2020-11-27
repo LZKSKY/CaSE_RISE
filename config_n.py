@@ -34,6 +34,8 @@ class Config(object):
         self.edit2id = {0:  self.edit_pad_id, 'K': 1, 'I': 2, 'D': 3, 'S': 4}
         self.id2edit = dict([(v, k) for k, v in self.edit2id.items()])
         self.cand_len = 20
+        self.K = 5
+        self.L = 5
         self.logger = self.get_logger() if path == '../' else None
 
     def get_logger(self):
