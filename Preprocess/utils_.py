@@ -154,16 +154,20 @@ class TagSeq:
 
     def get_label(self, input_seq, output_seq, return_length=False):
         # derived label from matrix
-        matrix = self.get_edit_matrix(input_seq, output_seq)
-        trajectory = self.get_path(matrix, input_seq, output_seq)
-        new_trajectory = self.merge_path(trajectory, len(input_seq) + 1)
+        matrix = self.get_edit_matrix(input_seq, output_seq)    # [m + 1, n + 1]
+        trajectory = self.get_path(matrix, input_seq, output_seq)   # [traj]
+        new_trajectory = self.merge_path(trajectory, len(input_seq) + 1)    # [m + 1]
+        # new_trajectory = trajectory
+        # TODO: check length and design standard
         if return_length:
             return new_trajectory, self.return_length(trajectory)
         else:
             return new_trajectory
 
 
-def obtain_gen_seq(tag_arr: List[Tag], sep_token_id, input_query):
+def obtain_gen_seq(tag_arr: List[Tag], input_query):
+    if len(tag_arr) == len(input_query) + 1:
+        tag_arr = tag_arr[:-1]
     input_len = len(tag_arr)
     i = 0
     gen_seq_arr = []
@@ -180,6 +184,7 @@ def obtain_gen_seq(tag_arr: List[Tag], sep_token_id, input_query):
         else:
             i += 1
     return gen_seq_arr
+
 
 
 

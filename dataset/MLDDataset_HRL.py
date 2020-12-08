@@ -6,7 +6,11 @@ import torch
 from copy import deepcopy
 from dataset.utils import pad
 from Preprocess.utils_ import Tag, obtain_gen_seq, TagSeq
+from Preprocess.PhraseTokenizer import PhraseTokenizer
+# from Trainer.utils import sampling
 from typing import List
+from random import shuffle
+from time import time
 import numpy as np
 tag_seq = TagSeq()
 
@@ -15,10 +19,13 @@ class MLDDatasetHRL(Dataset):
     def __init__(self, samples=None, tokenizer=None, phrase_tokenizer=None, query_len=30, answer_len=30, n=1E10,
                  context_len=3, max_candidate_num=20, sample_tensor=None, data_type='gen'):
         super().__init__()
-        self.samples = samples
+        self.samples: dict = {'origin': samples, 'memory': [], 'cache': [],
+                              'origin_tensor': [], 'memory_tensor': [], 'cache_tensor': [],
+                              'origin_sample_tensor': [], 'memory_sample_tensor': [], 'cache_sample_tensor': []
+                              }    # origin sample
         self.context_len = context_len
         self.max_candidate_num = max_candidate_num
-        self.phrase_tokenizer = phrase_tokenizer
+        self.phrase_tokenizer: PhraseTokenizer = phrase_tokenizer
         self.max_gen_len = 20
         self.max_gen_num = 5
         self.tag_seq = tag_seq
@@ -34,21 +41,22 @@ class MLDDatasetHRL(Dataset):
         self.edit_pad_id = config.edit_pad_id
         self.n = n
         self.len = -1
-
-        self.sample_tensor = []
-        if data_type in ['gen', 'g']:
-            self.load_edit_gen()
-        elif data_type == 'eval':
-            self.load_eval()
-        else:
-            raise ValueError
-        # else:
-        #     self.sample_tensor = sample_tensor
-        #     self.len = len(self.sample_tensor)
+        self.max_memory_len = len(samples)
+        '''
+            samples: tensor for samples
+            memory, cache: tensor for memory and cache
+            memory_sample, cache_sample: tensor for sampling memory and cache
+        '''
+        '''
+            sample, tensor, sample_tensor when in true memory
+        '''
+        self.sample_used: dict = {'sample': [], 'tensor': [], 'sample_tensor': []}
+        self.sample_tensor_used: list = []
+        self.sample_tensor_used_len = len(samples)
 
     def obtain_gen_label(self, tag_arr: List[Tag], input_query):
         # classification
-        gen_seq_arr = obtain_gen_seq(tag_arr, self.tokenizer.sep_token_id, input_query)
+        gen_seq_arr = obtain_gen_seq(tag_arr, input_query)
         seq_arr = []
         label_arr = []
         for seq in gen_seq_arr:
@@ -62,19 +70,43 @@ class MLDDatasetHRL(Dataset):
         label_arr = pad(label_arr, 0, self.max_gen_num)
         return seq_arr, label_arr
 
-    def obtain_input_output(self, context_token, seq, seq_out):
+    def obtain_gen_sequence(self, tag_arr: List[Tag], input_query):
+        # classification
+        gen_seq_arr = obtain_gen_seq(tag_arr, input_query)
+        seq_arr = []
+        label_arr = []
+        for seq in gen_seq_arr:
+            decoder_seq = seq[0] + [self.tokenizer.cls_token_id]
+            # decoder_seq.extend([self.tokenizer.bos_token_id] + seq[1])
+            decoder_label = self.phrase_tokenizer.convert_token_to_id(seq[1])
+            decoder_seq = pad(decoder_seq, self.tokenizer.pad_token_id, self.max_gen_len, padding_mode='l')
+            seq_arr.append(decoder_seq)
+            label_arr.append(decoder_label)
+        seq_arr = pad(seq_arr, [self.tokenizer.pad_token_id] * self.max_gen_len, self.max_gen_num)
+        label_arr = pad(label_arr, 0, self.max_gen_num)
+        return seq_arr, label_arr
+
+    def obtain_input_output(self, context_token, seq, seq_out=None, edits=None):
         pad_token_id, sep_token_id, cls_token_id, bos_token_id, eos_token_id = \
             self.tokenizer.pad_token_id, self.tokenizer.sep_token_id, self.tokenizer.cls_token_id, \
             self.tokenizer.bos_token_id, self.tokenizer.eos_token_id
 
         in_seq = [bos_token_id] + seq[:self.query_len] + [eos_token_id]
-        tag_label: List[Tag] = self.tag_seq.get_label(seq, seq_out, return_length=False)
-        output_tag = [self.edit2id[edit_tag.ope] for edit_tag in tag_label + [Tag('K', [])]]
-        decoder_input_seq, decoder_out_seq = self.obtain_gen_label(tag_arr=tag_label, input_query=in_seq)
-
-        input_ids = context_token['input_ids'] + pad(in_seq[:self.query_len], pad_token_id, self.input_len)
+        input_ids = context_token['input_ids'] + pad(in_seq, pad_token_id, self.input_len)
         pos_ids = context_token['pos_ids'] + list(range(self.input_len))
         seg_ids = [0] * self.extract_len + [1] * self.input_len
+        if edits is None:
+            tag_label: List[Tag] = self.tag_seq.get_label(seq, seq_out, return_length=False)
+            output_tag = [self.edit2id[edit_tag.ope] for edit_tag in tag_label + [Tag('K', [])]]
+        else:
+            if len(edits) == len(in_seq) - 1:
+                tag_label = edits
+                output_tag = [self.edit2id[edit_tag.ope] for edit_tag in edits + [Tag('K', [])]]
+            else:
+                assert len(edits) == len(in_seq)
+                tag_label = edits[:-1]
+                output_tag = [self.edit2id[edit_tag.ope] for edit_tag in edits]
+        decoder_input_seq, decoder_out_seq = self.obtain_gen_label(tag_arr=tag_label, input_query=in_seq)
         edit_pred_arr = [self.edit_pad_id] * self.extract_len + pad(output_tag, self.edit_pad_id, self.input_len)
         return input_ids, pos_ids, seg_ids, edit_pred_arr, decoder_input_seq, decoder_out_seq
 
@@ -105,156 +137,217 @@ class MLDDatasetHRL(Dataset):
         context_token['pos_ids'] = pad(context_token['pos_ids'], 0, self.extract_len)
         return context_token
 
-    def obtain_reward(self, sample):
-        input_query, output_query = sample['input_query'], sample['output_query']
-        trajectory = sample['trajectory']   # List[Seq]
-        # if not trajectory:
-        #     trajectory = [input_query, output_query]
-        # trajectory.extend([output_query])
-        Lev = [self.tag_seq.get_label(seq_t, output_query, return_length=True)[1] for seq_t in trajectory]
-        Lev = np.array(Lev)
-        reward = np.sqrt(Lev[:-1] - Lev[1:])    # sqrt(D_{t+1} - D_t)
-        reward[-1] = max(np.sqrt(Lev[0]) / 2, 1)       # for final keep probability, mean of sqrt Lev distance
-        for i in range(len(reward) - 2, -1, -1):
-            reward[i] = reward[i + 1] * 0.5 + reward[i]
-        # we assume trajectory has max length 4, then, we require, each time it needs to reduce sqrt(Lev) / 4, right?
-        reward -= np.sqrt(Lev[0]) / 4
-        return reward
+    @staticmethod
+    def get_Lev(x, y):
+        edit_matrix = tag_seq.get_edit_matrix(x, y)
+        return edit_matrix[-1][-1][0]
 
-    def load_edit_gen_V1(self):     # edit can do with gen
-        pad_token_id, sep_token_id, cls_token_id, bos_token_id, eos_token_id = \
-            self.tokenizer.pad_token_id, self.tokenizer.sep_token_id, self.tokenizer.cls_token_id, \
-            self.tokenizer.bos_token_id, self.tokenizer.eos_token_id
-        for sample in tqdm(self.samples):
+    @staticmethod
+    def get_reward(y_t, y_t1, y, d0=None, d1=None):
+        if d1 is None:
+            d1 = MLDDatasetHRL.get_Lev(y_t1, y)
+        r = 1 / (d1 + 1)  # gain of current state
+        return r
+
+    def load_samples(self, samples, d1=None, verbose=False, k_in='input_query', k_out='current_output_query',
+                     has_edits=False):
+        sample_tensor = []
+        for index, sample in enumerate(samples):
             context_token = self.obtain_context(sample['context'][-self.context_len:],
                                                 sample['context_answer'][-self.context_len:])
-            input_query, output_query = sample['input_query'], sample['output_query']
-            pad_output_query = pad(output_query[:self.query_len], pad_token_id, self.query_len)
+            input_query, output_query = sample[k_in], sample[k_out]
+            edits = sample['edits'] if has_edits else None
             input_ids, pos_ids, seg_ids, edit_pred_arr, decoder_input_seq, decoder_out_seq = \
-                self.obtain_input_output(context_token, input_query, output_query)
-            self.sample_tensor.append([context_token['input_ids'], context_token['pos_ids'], context_token['type_ids'],
-                                       edit_pred_arr, decoder_input_seq, decoder_out_seq, pad_output_query])
-        self.len = len(self.sample_tensor)
+                self.obtain_input_output(context_token, input_query, output_query, edits)
+            reward = MLDDatasetHRL.get_reward(input_query, output_query, output_query, d1=d1)
+            sample_arr = [input_ids, pos_ids, seg_ids, edit_pred_arr, decoder_input_seq,
+                          decoder_out_seq, reward]
+            sample_tensor.append(sample_arr)
+        return sample_tensor
 
-    def load_edit_gen(self):     # edit can do with gen
-        self.sample_tensor = []
-        for sample_index, sample in enumerate(tqdm(self.samples)):
+    def load_samples2gen(self, samples, verbose=False, k_in='input_query'):
+        sample_tensor = []
+        for sample_index, sample in enumerate(samples):
             context_token = self.obtain_context(sample['context'][-self.context_len:],
                                                 sample['context_answer'][-self.context_len:])
-            input_query, output_query = sample['input_query'], sample['output_query']
-            if sample.get('trajectory', None) is None:
-                sample['trajectory'] = [input_query]
-                sample['reward'] = []
-            trajectory = sample['trajectory']
-            reward_arr = self.obtain_reward(sample)
-            sample_arr = []
-            for i in range(len(trajectory)):
-                input_ids, pos_ids, seg_ids, edit_pred_arr, decoder_input_seq, decoder_out_seq = \
-                    self.obtain_input_output(context_token, trajectory[i], output_query)
-                sample_arr.append([input_ids, pos_ids, seg_ids, edit_pred_arr, decoder_input_seq,
-                                   decoder_out_seq, reward_arr[i], sample_index])
-            self.sample_tensor.extend(sample_arr)
-        self.len = len(self.sample_tensor)
+            input_query = sample[k_in]
+            input_ids, pos_ids, seg_ids = self.obtain_input(context_token, input_query)
+            sample_arr = [input_ids, pos_ids, seg_ids]
+            sample_tensor.append(sample_arr)
+        return sample_tensor
 
-    def load_rl(self):     # edit can do with gen
-        self.sample_tensor = []
-        for sample_index, sample in enumerate(tqdm(self.samples)):
-            context_token = self.obtain_context(sample['context'][-self.context_len:],
-                                                sample['context_answer'][-self.context_len:])
-            input_query, output_query = sample['input_query'], sample['output_query']
-            if sample.get('trajectory', None) is None:
-                sample['trajectory'] = [input_query]
-                sample['reward'] = []
-            trajectory = sample['trajectory']
-            reward_arr = self.obtain_reward(sample)
-            sample_arr = []
-            for i in range(len(trajectory)):
-                input_ids, pos_ids, seg_ids, edit_pred_arr, decoder_input_seq, decoder_out_seq = \
-                    self.obtain_input_output(context_token, trajectory[i], output_query)
-                sample_arr.append([input_ids, pos_ids, seg_ids, edit_pred_arr, decoder_input_seq,
-                                   decoder_out_seq, reward_arr[i], sample_index])
-            self.sample_tensor.extend(sample_arr)
-        self.len = len(self.sample_tensor)
+    def obtain_edits(self, edits: List[Tag], gen_ids):
+        # return final action, decoder_label
+        input_len = len(edits)
+        i = 0
+        gen_index = 0
+        while i < input_len:
+            if edits[i].ope == 'I':
+                edits[i].seq = self.phrase_tokenizer.convert_id_to_token_arr(gen_ids[gen_index])
+                gen_index += 1
+                i += 1
+            elif edits[i].ope == 'S':
+                token_arr = self.phrase_tokenizer.convert_id_to_token_arr(gen_ids[gen_index])
+                gen_index += 1
+                edits[i].seq = token_arr
+                i += 1
+                while i < input_len and edits[i].ope == 'S':
+                    edits[i].seq = token_arr
+                    i += 1
+            else:
+                i += 1
 
-    def load_eval(self, new_sample_ids=None):
-        for index, sample in enumerate(tqdm(self.samples)):
-            context_token = self.obtain_context(sample['context'][-self.context_len:],
-                                                sample['context_answer'][-self.context_len:])
-            input_query, output_query = sample['input_query'], sample['output_query']
-            # pad_output_query = pad(output_query[:self.query_len], pad_token_id, self.query_len)
-            if sample.get('eval_trajectory', None) is None:
-                sample['eval_trajectory'] = [input_query]
-            if new_sample_ids is not None:
-                sample['eval_trajectory'].extend(new_sample_ids[index])
-            seq_input = sample['eval_trajectory'][-1]
-            input_ids, pos_ids, seg_ids = self.obtain_input(context_token, seq_input)
-            self.sample_tensor.extend([input_ids, pos_ids, seg_ids])
-        self.len = len(self.sample_tensor)
+    def load_sample_init(self):
+        for sample in self.samples['origin']:
+            sample['current_output_query'] = deepcopy(sample['input_query'])
 
-    def eval_reward(self):
-        r_arr = []
-        for index, sample in enumerate(tqdm(self.samples)):
-            input_query, output_query = sample['input_query'], sample['output_query']
-            trajectory = sample['eval_trajectory']  # List[Seq]
-            Lev = [self.tag_seq.get_label(seq_t, output_query, return_length=True)[1] for seq_t in trajectory]
-            Lev = np.array(Lev)
-            r = Lev[0] - Lev[-1]
-            r_arr.append(r)
-        return np.mean(r_arr)
+        self.samples['origin_tensor'] = self.load_samples(self.samples['origin'], d1=0., k_in='input_query',
+                                                          k_out='output_query', has_edits=False)
+        self.samples['origin_sample_tensor'] = self.load_samples2gen(self.samples['origin'],  k_in='current_output_query')
+        self.append_index(self.samples['origin_tensor'])
+        self.append_index(self.samples['origin_sample_tensor'])
+        self.sample_used['sample'] = self.samples['origin'][-self.sample_tensor_used_len:]
+        self.sample_used['tensor'] = self.samples['origin_tensor'][-self.sample_tensor_used_len:]
+        self.sample_used['sample_tensor'] = self.samples['origin_sample_tensor'][-self.sample_tensor_used_len:]
+        self.sample_tensor_used = self.sample_used['tensor']
 
-    def obtain_data2delete(self):
-        index = 0
-        self.sample_tensor = []
-        for sample in tqdm(self.samples):
-            context_token = self.obtain_context(sample['context'][-self.context_len:],
-                                                sample['context_answer'][-self.context_len:])
-            # input_query, output_query = sample['input_query'], sample['output_query']
-            trajectory = sample['trajectory']
-            reward_arr = self.obtain_reward(sample)
-            # sample_arr = []
-            # len_traj = len(trajectory)
-            # record which trans has been calculate and store at where
-            record_map_arr = []
-            for i in range(len(trajectory) - 1):
-                input_ids, pos_ids, seg_ids, edit_pred_arr, decoder_input_seq, decoder_out_seq = \
-                    self.obtain_input_output(context_token, trajectory[i], trajectory[i + 1])
-                self.sample_tensor.append([input_ids, pos_ids, seg_ids, edit_pred_arr, decoder_input_seq,
-                                           decoder_out_seq, reward_arr[i]])
-                record_map_arr.append([i, i + 1, index])
-                index += 1
-            for i in range(len(trajectory) - 2):
-                input_ids, pos_ids, seg_ids, edit_pred_arr, decoder_input_seq, decoder_out_seq = \
-                    self.obtain_input_output(context_token, trajectory[i], trajectory[i + 2])
-                self.sample_tensor.append([input_ids, pos_ids, seg_ids, edit_pred_arr, decoder_input_seq,
-                                           decoder_out_seq, reward_arr[i]])
-                record_map_arr.append([i, i + 1, index])
-                index += 1
-            sample['map_index_record'] = record_map_arr
-        self.len = len(self.sample_tensor)
+    def load_sample_check(self):
+        # load sample when loaded
+        for sample in self.samples['origin']:
+            sample['current_output_query'] = deepcopy(sample['input_query'])
+        self.samples['origin_tensor'] = self.load_samples(self.samples['origin'], d1=0., k_in='input_query',
+                                                          k_out='output_query', has_edits=False)
+        self.samples['origin_sample_tensor'] = self.load_samples2gen(self.samples['origin'], k_in='current_output_query')
+        self.samples['memory_tensor'] = self.load_samples(self.samples['memory'], k_in='input_query',
+                                                          k_out='current_output_query', has_edits=True)
+        self.samples['memory_sample_tensor'] = self.load_samples2gen(self.samples['memory'], k_in='current_output_query')
+        self.append_index(self.samples['origin_tensor'])
+        self.append_index(self.samples['origin_sample_tensor'])
+        self.append_index(self.samples['memory_tensor'])
+        self.append_index(self.samples['memory_sample_tensor'])
 
-    def apply_delete(self, scores):
-        for sample in tqdm(self.samples):
-            trajectory = sample['trajectory']
-            len_traj = len(trajectory)
-            score_matrix = np.zeros([len_traj, len_traj])
-            for tup in sample['map_index_record']:
-                score_matrix[tup[0], tup[1]] = scores[tup[2]]
-            new_trajectory = [trajectory[0]]
-            fix = False
-            for i in range(1, len_traj - 1):
-                if not fix and score_matrix[i - 1, i] + score_matrix[i, i + 1] < score_matrix[i - 1, i + 1]:
-                    fix = True
-                else:
-                    new_trajectory.append(trajectory[i])
-                    fix = False
-            new_trajectory.append(trajectory[-1])
-            sample['trajectory'] = new_trajectory
+        shuff_data = list(zip(self.samples['memory'], self.samples['memory_tensor'], self.samples['memory_sample_tensor']))
+        shuff_data.extend(zip(self.samples['origin'], self.samples['origin_tensor'], self.samples['origin_sample_tensor']))
+        shuffle(shuff_data)
+        shuff_data = shuff_data[-self.sample_tensor_used_len:]
+        self.sample_used['sample'], self.sample_used['tensor'], self.sample_used['sample_tensor'] = list(zip(*shuff_data))
+        self.set_index(self.sample_used['tensor'])
+        self.set_index(self.sample_used['sample_tensor'])
+        self.sample_tensor_used = self.sample_used['tensor']
+
+    def load_sample_gen(self):
+        self.sample_used['sample'] = self.samples['origin']
+        self.sample_used['sample_tensor'] = self.load_samples2gen(self.samples['origin'])
+        self.append_index(self.sample_used['sample_tensor'])
+        self.sample_tensor_used = self.sample_used['sample_tensor']
+
+    def load_sample_prob(self, wait_arr):
+        # for multiple action
+        all_sample_arr = []
+        for action_arr, extend_input_query, sample_index in wait_arr:
+            for action in action_arr:
+                sample = deepcopy(self.sample_used['sample'][sample_index])
+                sample['edits'] = action
+                sample['output_query'] = extend_input_query[1:-1]
+                all_sample_arr.append(sample)
+        samples = self.load_samples(all_sample_arr, d1=0., k_in='current_output_query', k_out='output_query',
+                                    has_edits=True)
+        self.append_index(samples)
+        return samples
+
+    def load_sample_prob_action(self, wait_arr):
+        # for simple action
+        all_sample_arr = []
+        for action, extend_input_query, sample_index in wait_arr:
+            sample = deepcopy(self.sample_used['sample'][sample_index])
+            sample['edits'] = action
+            sample['output_query'] = extend_input_query[1:-1]
+            all_sample_arr.append(sample)
+        samples = self.load_samples(all_sample_arr, d1=0., k_in='current_output_query', k_out='output_query',
+                                    has_edits=True)
+        self.append_index(samples)
+        return samples
+
+    @staticmethod
+    def compare(arr1, arr2):
+        if len(arr1) != len(arr2):
+            return False
+        for i in range(len(arr1)):
+            if arr1[i] != arr2[i]:
+                return False
+        return True
+
+    def check_cache(self):
+        count = 0
+        for sample in self.samples['cache']:
+            if not self.compare(sample['current_query'], sample['output_query']):
+                count += 1
+        print(count / len(self.samples['cache']))
+
+    def add_cache(self, add_cache_arr):
+        sample_arr = []
+        for index, cache in enumerate(add_cache_arr):
+            sample_index = cache['sample_index']
+            new_query = cache['new_query']
+            edits = cache['edits']
+            sample: dict = deepcopy(self.sample_used['sample'][sample_index])
+            sample['input_query'], sample['current_output_query'] = sample['current_output_query'], new_query
+            sample['edits'] = edits
+            sample_arr.append(sample)
+        # cache_tensor = self.load_samples(sample_arr, verbose=False, k_in='input_query', k_out='current_output_query',
+        #                                  has_edits=True)
+        # cache_sample_tensor = self.load_samples2gen(sample_arr, verbose=False, k_in='current_output_query')
+        self.samples['cache'].extend(sample_arr)
+        # self.samples['cache_tensor'].extend(cache_tensor)
+        # self.samples['cache_sample_tensor'].extend(cache_sample_tensor)
+
+    @staticmethod
+    def append_index(sample_tensor):
+        for index, sample in enumerate(sample_tensor):
+            sample.append(index)
+
+    @staticmethod
+    def set_index(sample_tensor):
+        # print('setting index')
+        for index, sample in enumerate(sample_tensor):
+            sample[-1] = index
+
+    def update_cache(self):
+        # t1 = time()
+        cache_tensor = self.load_samples(self.samples['cache'], verbose=False, k_in='input_query',
+                                         k_out='current_output_query', has_edits=True)
+        cache_sample_tensor = self.load_samples2gen(self.samples['cache'], verbose=False, k_in='current_output_query')
+        self.samples['cache_tensor'] = cache_tensor
+        self.samples['cache_sample_tensor'] = cache_sample_tensor
+        self.append_index(self.samples['cache_tensor'])
+        self.append_index(self.samples['cache_sample_tensor'])
+        # t2 = time()
+        # random replace
+        shuff_data = list(zip(self.samples['memory'], self.samples['memory_tensor'], self.samples['memory_sample_tensor']))
+        shuff_data.extend(zip(self.samples['cache'], self.samples['cache_tensor'], self.samples['cache_sample_tensor']))
+        shuffle(shuff_data)
+        shuff_data = shuff_data[-self.max_memory_len:]
+        self.samples['memory'],  self.samples['memory_tensor'], self.samples['memory_sample_tensor'] = list(zip(*shuff_data))
+
+        shuff_data.extend(zip(self.samples['origin'], self.samples['origin_tensor'], self.samples['origin_sample_tensor']))
+        shuffle(shuff_data)
+        shuff_data = shuff_data[-self.sample_tensor_used_len:]
+        self.sample_used['sample'], self.sample_used['tensor'], self.sample_used['sample_tensor'] = list(zip(*shuff_data))
+        # t3 = time()
+        self.set_index(self.sample_used['tensor'])
+        self.set_index(self.sample_used['sample_tensor'])
+        self.samples['cache'] = []
+        self.samples['cache_tensor'] = []
+        self.samples['cache_sample_tensor'] = []
+        self.sample_tensor_used = self.sample_used['tensor']
+        # t_arr = np.array([t1, t2, t3])
+        # print(t_arr[1:] - t_arr[:-1])
 
     def __getitem__(self, index):
-        return self.sample_tensor[index]
+        return self.sample_tensor_used[index]
 
     def __len__(self):
-        return self.len
+        return len(self.sample_tensor_used)
 
 
 def train_edit_gen_fn(batch_data):
@@ -270,18 +363,17 @@ def train_edit_gen_fn(batch_data):
     return {'input_token_tensor': tokens_tensor, 'pos_ids_tensor': pos_ids_tensor,
             'type_tokens_tensor': type_tokens_tensor, 'edit_labels_tensor': edit_labels_tensor,
             'decoder_input_tensor': decoder_input_tensor, 'decoder_out_tensor': decoder_out_tensor,
-            'reward': reward_tensor, 'sample_index': sample_index}
+            'reward_tensor': reward_tensor, 'sample_index': sample_index}
 
 
-def eval_fn(batch_data):
-    tokens, pos_ids, type_tokens, edit_labels, decoder_input, decoder_out, reward = list(zip(*batch_data))
+def eval_gen_fn(batch_data):
+    tokens, pos_ids, type_tokens, sample_index = list(zip(*batch_data))
     tokens_tensor = torch.tensor(tokens, dtype=torch.long).to(device)
     pos_ids_tensor = torch.tensor(pos_ids, dtype=torch.long).to(device)
     type_tokens_tensor = torch.tensor(type_tokens, dtype=torch.long).to(device)
+
     return {'input_token_tensor': tokens_tensor, 'pos_ids_tensor': pos_ids_tensor,
-            'type_tokens_tensor': type_tokens_tensor}
-
-
+            'type_tokens_tensor': type_tokens_tensor, 'sample_index': sample_index}
 
 
 

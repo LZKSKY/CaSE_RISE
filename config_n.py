@@ -29,13 +29,27 @@ class Config(object):
         self.baseline_dataset_path = f'{path}QuacN/BaselineDataset/'
         self.output_path = f'{path}QuacN/Output/'
         self.save_path = f'{path}QuacN/model/'
+        self.log_path = f'{path}QuacN/Summary/'
         self.bert_special_tokens_dict = {'sep_token': '[SEP]', 'pad_token': '[PAD]', 'cls_token': '[CLS]'}
         self.edit_pad_id = 0
         self.edit2id = {0:  self.edit_pad_id, 'K': 1, 'I': 2, 'D': 3, 'S': 4}
         self.id2edit = dict([(v, k) for k, v in self.edit2id.items()])
         self.cand_len = 20
-        self.K = 5
-        self.L = 5
+        self.K = 1
+        self.L = 4
+        self.train_fold = 8
+        self.sample_fold = 8
+        self.batch_size = 8
+        self.accumulation_steps = 4
+        # self.load_epoch = 10
+        self.load_epoch = 10
+        self.initial_lr = 5e-5
+        self.tune_lr = 1e-5
+        self.tune_epoch = 5
+        self.max_epoch = 25
+        self.rl_epoch = 25
+        self.rl_begin_epoch = 10
+        self.sampling_strategy = 'RISE'
         self.logger = self.get_logger() if path == '../' else None
 
     def get_logger(self):

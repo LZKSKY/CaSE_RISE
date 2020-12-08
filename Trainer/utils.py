@@ -50,7 +50,9 @@ def cal_cost(seq_a, seq_b, prob):
 
 
 def sample_action_by_p(seq_a, seq_b, P):
-    # note that, we return a seq of n + 1 operation of [BOS] + [seq_a]
+    # in: m, n, m + 1 * n + 1
+    # return m + 2
+    # note that, we return a seq of n + 1 operation of [BOS] + [seq_a] + [EOS]
     n = len(seq_a)
     m = len(seq_b)
     i = n
@@ -101,20 +103,53 @@ def sample_action_by_p(seq_a, seq_b, P):
         ops_arr.append([0, 'K', record_seq])
 
     tag_arr = [Tag(ops, seq) for index, ops, seq in list(reversed(ops_arr))]
+    tag_arr += [Tag('K', [])]
+    assert len(tag_arr) == len(seq_a) + 2
     return tag_arr
+
+
+def K_sampling(tag_arr, prob):
+    # new_tag_arr = []
+    l = len(tag_arr)
+    p = np.random.random(size=l)
+    rep = p <= prob[:l, config.edit2id['K']]
+    for i, tag in enumerate(tag_arr):
+        if rep[i]:
+            tag_arr[i] = Tag('K', [])
+
+
+def sampling(prob, L, sampling_strategy='softmax', eps=0.2, tag=False):
+    prob = np.array(prob)
+    assert len(prob.shape) == 2
+    if sampling_strategy == 'greedy':
+        all_len = prob.shape[1] - 2     # 1 for padding, 1 for max
+        arg_index = prob.argmax(axis=1)
+        prob = np.ones_like(prob) * (eps / all_len)
+        prob[:, 0] = 0.
+        prob[np.arange(prob.shape[0]), arg_index] = 1 - eps
+    arr = []
+    for i in range(L):
+        v = np.random.choice(len(prob[i]), p=prob[i])
+        assert v > 0
+        if tag:
+            v = Tag(config.id2edit[v], [])
+        arr.append(v)
+    return arr
 
 
 def apply_action(seq_a, action):
     new_arr = []
-    # seq_a = ['CLS'] + seq_a
+    # seq_a = ['BOS'] + seq_a + ['EOS]
     assert len(action) == len(seq_a)
-    for index, act, seq in action:
+    for index, tag in enumerate(action):
+        act, seq = tag.ope, tag.seq
         if act == 'K':
             new_arr.append(seq_a[index])
         elif act == 'I':
             new_arr.extend([seq_a[index]] + seq)
         elif act == 'S':
             new_arr.extend(seq)
+    # BOS + seq_a + EOS
     return new_arr
 
 

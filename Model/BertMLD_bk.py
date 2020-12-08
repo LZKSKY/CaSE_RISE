@@ -30,7 +30,6 @@ class BertMLD(nn.Module):
         self.pad_token_id = tokenizer.pad_token_id
         self.bos_token_id = tokenizer.bos_token_id
         self.eos_token_id = tokenizer.eos_token_id
-        self.cls_token_id = tokenizer.cls_token_id
         self.edit2id = config.edit2id
         self.id2edit = config.id2edit
         self.phrase_tokenizer = phrase_tokenizer
@@ -65,18 +64,18 @@ class BertMLD(nn.Module):
             else:
                 edit_loss = F.nll_loss(edit_out.log_softmax(dim=-1).transpose(1, 2), edit_labels, ignore_index=0,
                                        reduction='mean')
-            return {'edit_output': edit_out, 'edit_loss': edit_loss, 'encoder_output': encoder_output}
+            return edit_out, edit_loss, encoder_output
         else:
-            return {'edit_output': edit_out, 'encoder_output': encoder_output}
+            return edit_out, encoder_output
 
     def seq_predict(self, data, encoder_output, compute_loss=True, method=None):
         input_ids = data['input_token_tensor']  # [b, s1]
         decoder_input = data['decoder_input_tensor']  # [b, l, s2]
-
+        decoder_label = data['decoder_out_tensor']  # [b, l, s2]
         encoder_attention_mask = input_ids != self.pad_token_id
         decoder_attention_mask = decoder_input != self.pad_token_id
         batch_size, gen_dim, decoder_seq_len = decoder_input.size()
-        encoder_seq_len = encoder_output[0].size(1)
+        _, encoder_seq_len = input_ids.size()
         encoder_hidden_expand = encoder_output[0].unsqueeze(dim=1).expand(batch_size, gen_dim, encoder_seq_len,
                                                                           -1).contiguous(). \
             view(batch_size * gen_dim, encoder_seq_len, -1)  # [b * l, s1]
@@ -84,6 +83,7 @@ class BertMLD(nn.Module):
             view(batch_size * gen_dim, encoder_seq_len)  # [b * l, s1]
         decoder_input_expand = decoder_input.contiguous().view(batch_size * gen_dim, decoder_seq_len)
         decoder_attention_mask_expand = decoder_attention_mask.contiguous().view(batch_size * gen_dim, decoder_seq_len)
+        decoder_label_expand = decoder_label.contiguous().view(-1)
 
         decoder_outputs = self.pretrain_model.decoder(
             input_ids=decoder_input_expand,
@@ -96,10 +96,7 @@ class BertMLD(nn.Module):
         )
         gen_hidden = decoder_outputs.hidden_states[-1][:, -1]  # [b * s, V]
         gen_out = self.gen_linear(gen_hidden)
-        gen_out_view = gen_out.contiguous().view(batch_size, gen_dim, -1)
         if compute_loss:
-            decoder_label = data['decoder_out_tensor']  # [b, l, s2]
-            decoder_label_expand = decoder_label.contiguous().view(-1)
             if method == 'rl_train':
                 reward = data['reward_tensor']  # [b]
                 gen_loss = F.nll_loss(gen_out.log_softmax(dim=-1), decoder_label_expand, ignore_index=0,
@@ -114,23 +111,63 @@ class BertMLD(nn.Module):
             else:
                 gen_loss = F.nll_loss(gen_out.log_softmax(dim=-1), decoder_label_expand, ignore_index=0,
                                       reduction='mean')     # []
-            return {'gen_output': gen_out_view, 'gen_loss': gen_loss}
+            return {'gen_out': gen_out, 'gen_loss': gen_loss}
         else:
-            return {'gen_output': gen_out_view}
+            return {'gen_out': gen_out}
 
     def do_edit_gen(self, data, method='train', compute_loss=True, **kwargs):
-        edit_dict = self.edit_pred(data, compute_loss=compute_loss, method=method)
-        gen_dict: Dict = self.seq_predict(data, edit_dict['encoder_output'], compute_loss=compute_loss, method=method)
+        edit_out, edit_loss, encoder_output = self.edit_pred(data, method)
+        gen_dict: Dict = self.seq_predict(data, encoder_output, compute_loss=compute_loss, method=method)
         decoder_label = data['decoder_out_tensor']  # [b, l, s2]
         edit_labels = data['edit_labels_tensor']  # [b, s1]
         decoder_label_expand = decoder_label.contiguous().view(-1)
-        reward = data['reward_tensor']
-        gen_dict.update(edit_dict)
-        gen_dict.update({'edit_label': edit_labels, 'gen_label': decoder_label_expand, 'reward': reward})
+        gen_dict.update({'edit_output': edit_out, 'edit_label': edit_labels, 'edit_loss': edit_loss,
+                         'gen_label': decoder_label_expand})
         return gen_dict
 
-    def forward(self, data, method='train', compute_loss=True, **kwargs):
-        return self.do_edit_gen(data, method,  compute_loss=compute_loss, **kwargs)
+    def edit2sequence_v1(self, edit_out: torch.Tensor, input_ids: torch.Tensor, encoder_attention_mask: torch.Tensor):
+        # let SDS = SSS; 但是预测出来还是烂的
+        edit_out_prob = edit_out.softmax(dim=-1)
+        edit_out_prob[:, :, 0] = 0.
+        edit_label = edit_out_prob.argmax(dim=-1)
+        edit_label[~encoder_attention_mask] = 0
+        edit_label[input_ids == self.eos_token_id] = self.edit2id['K']
+        edit_label_numpy = edit_label.detach().cpu().numpy()
+        input_ids_numpy = input_ids.detach().cpu().numpy()
+        seq_left_arr = []
+        seq2gen_arr = []
+        for index_i, seq in enumerate(input_ids_numpy):
+            seq_left_i = []
+            seq_gen_i = []
+            index_j = 0
+            seq_l_ij = np.sum(seq != self.pad_token_id)
+            while index_j < seq_l_ij:
+                edit_ij = self.id2edit[edit_label_numpy[index_i][index_j]]
+                if edit_ij == 'K':
+                    seq_left_i.append(seq[index_j])
+                    index_j += 1
+                elif edit_ij == 'D':
+                    index_j += 1
+                elif edit_ij == 'I':
+                    seq_gen_i.append(pad([seq[index_j], self.tokenizer.sep_token_id,  seq[index_j + 1]],
+                                         self.pad_token_id, 5, padding_mode='l') + [self.bos_token_id])
+                    index_j += 1
+                    seq_left_i.append('<pad>')
+                elif edit_ij == 'S':
+                    temp_arr = [seq[index_j]]
+                    index_j += 1
+                    while index_j < seq_l_ij and self.id2edit[edit_label_numpy[index_i][index_j]] == 'S':
+                        temp_arr.append(seq[index_j])
+                        index_j += 1
+                    seq_gen_i.append(pad(temp_arr, self.pad_token_id, 5, padding_mode='l') + [self.bos_token_id])
+                    seq_left_i.append('<pad>')
+                else:
+                    break
+            seq2gen_arr.append(seq_gen_i)
+            seq_left_arr.append(seq_left_i)
+        max_insert_len = max([len(s) for s in seq2gen_arr])
+        seq2gen_arr = [pad(s, [self.pad_token_id] * 6, max_insert_len) for s in seq2gen_arr]
+        return seq_left_arr, seq2gen_arr,
 
     def edit2sequence(self, edit_out: torch.Tensor, input_ids: torch.Tensor, encoder_attention_mask: torch.Tensor):
         edit_out_prob = edit_out.softmax(dim=-1)
@@ -176,17 +213,32 @@ class BertMLD(nn.Module):
         seq2gen_arr = [pad(s, [self.pad_token_id] * self.max_pred_len, max_insert_len) for s in seq2gen_arr]
         return seq_left_arr, seq2gen_arr,
 
+    def gen_final_ids_v1(self, seq_left_arr, output_ids):
+        output_ids_numpy = output_ids.detach().cpu().numpy()[:, 6:]
+        insert_ids = [[i for i in ids if i not in self.tokenizer.all_special_ids] for ids in output_ids_numpy]
+        final_seqs = []
+        for index_i, seq in enumerate(seq_left_arr):
+            temp_seq = []
+            insert_seq_count = 0
+            for w in seq:
+                if w == '<pad>':
+                    temp_seq.extend(insert_ids[index_i][insert_seq_count])
+                    insert_seq_count += 1
+                else:
+                    temp_seq.append(w)
+            final_seqs.append(temp_seq)
+        return final_seqs
+
     def gen_final_ids(self, seq_left_arr, output_ids):
         insert_ids = output_ids
         final_seqs = []
         for index_i, seq in enumerate(seq_left_arr):
             temp_seq = []
             insert_seq_count = 0
-            for index_j, w in enumerate(seq):
+            for w in seq:
                 if w == '<pad>':
-                    if insert_seq_count < len(insert_ids[index_i]):
-                        temp_seq.extend(insert_ids[index_i][insert_seq_count])
-                        insert_seq_count += 1
+                    temp_seq.extend(insert_ids[index_i][insert_seq_count])
+                    insert_seq_count += 1
                 else:
                     temp_seq.append(w)
             final_seqs.append(temp_seq)
@@ -200,37 +252,74 @@ class BertMLD(nn.Module):
         return self.tokenizer.convert_tokens_to_string(
             self.tokenizer.convert_ids_to_tokens(new_s, skip_special_tokens=skip_special_tokens))
 
-    def generate_edit_gen(self, data, method=None):
+    def generate_edit_gen_v1(self, data, method=None):
         input_ids = data['input_token_tensor']  # [b, s1]
-        encoder_attention_mask: torch.Tensor = input_ids != self.pad_token_id
+        encoder_attention_mask = input_ids != self.pad_token_id
         _, encoder_seq_len = input_ids.size()
         # encoder_hidden [b, s, hidden]
-        edit_dict = self.edit_pred(data, method, compute_loss=False)
-        edit_out, encoder_output = edit_dict['edit_output'], edit_dict['encoder_output']
+        edit_out, edit_loss, encoder_output = self.edit_pred(data, method)
         # [b, l, s], [b, s]
         seq_left_arr, seq2gen_arr = self.edit2sequence(edit_out[:, 190:], input_ids[:, 190:], encoder_attention_mask[:, 190:])
         # =================  gen insert ids ========================================
         seq2gen_tensor = torch.tensor(seq2gen_arr, dtype=input_ids.dtype, device=input_ids.device)
-        gen_data = {'input_token_tensor': input_ids, 'decoder_input_tensor': seq2gen_tensor}
-        gen_dict = self.seq_predict(gen_data, encoder_output, compute_loss=False)
-        gen_out = gen_dict['gen_output']
-        gen_id = gen_out.argmax(dim=-1)     # [b, max_s]
-        output_ids = self.phrase_tokenizer.convert_id_arr_to_token_arr(gen_id.contiguous().view(-1))
-        # [b, max_insert, seq]
-        insert_l = gen_out.size(1)
-        # print(insert_l, len(output_ids), len(seq_left_arr))
-        output_ids = [output_ids[index:(index + insert_l)] for index in range(0, len(output_ids), insert_l)]
+        insert_l = seq2gen_tensor.size(1)
+        batch_size, in_seq_len, hidden_size = encoder_output.last_hidden_state.size()
+        encoder_output.last_hidden_state = encoder_output.last_hidden_state.unsqueeze(dim=1).\
+            expand(batch_size, insert_l, in_seq_len, hidden_size).contiguous().view(-1, in_seq_len, hidden_size)
+        seq2gen_tensor = seq2gen_tensor.view(batch_size * insert_l, -1)
+        encoder_attention_mask_expand = encoder_attention_mask.unsqueeze(dim=1).\
+            expand(batch_size, insert_l, -1).contiguous().view(batch_size * insert_l, -1)
+        output_ids = generate(self.pretrain_model, input_ids=seq2gen_tensor, encoder_outputs=encoder_output,
+                              max_length=20, attention_mask=encoder_attention_mask_expand)
         # ==================   gen final ids ======================================
-        final_seqs = self.gen_final_ids(seq_left_arr, output_ids)   # [b, s]
+        final_seqs = self.gen_final_ids(seq_left_arr, output_ids)
         arr = []
         for index in range(len(input_ids)):
-            keys = ['input_query', 'gen_query', 'gen_query_ids', 'edit_ids']
-            seqs = (self.ids2str(input_ids[index, 190:]), self.ids2str(final_seqs[index]), final_seqs[index],
-                    edit_out[:, 190:].softmax(dim=-1).argmax(dim=-1)[index])
+            keys = ['input_query', 'gen_query', 'output_query', 'edit_ids']
+            seqs = (self.ids2str(input_ids[index, 190:]), self.ids2str(final_seqs[index]),
+                    self.ids2str(data['query_true'][index]), edit_out[:, 190:].softmax(dim=-1).argmax(dim=-1)[index])
             arr.append(dict(zip(keys, seqs)))
         return arr
 
-    def generate_edit_gen_mul(self, times):
-        for i in range(1, times + 1):
-            pass
-        pass
+    def generate_edit_gen(self, data, method=None):
+        input_ids = data['input_token_tensor']  # [b, s1]
+        encoder_attention_mask = input_ids != self.pad_token_id
+        _, encoder_seq_len = input_ids.size()
+        # encoder_hidden [b, s, hidden]
+        edit_out, encoder_output = self.edit_pred(data, method, compute_loss=False)
+        # [b, l, s], [b, s]
+        seq_left_arr, seq2gen_arr = self.edit2sequence(edit_out[:, 190:], input_ids[:, 190:], encoder_attention_mask[:, 190:])
+        # =================  gen insert ids ========================================
+        seq2gen_tensor = torch.tensor(seq2gen_arr, dtype=input_ids.dtype, device=input_ids.device)
+        insert_l = seq2gen_tensor.size(1)
+        batch_size, in_seq_len, hidden_size = encoder_output.last_hidden_state.size()
+        seq2gen_tensor = seq2gen_tensor.view(batch_size * insert_l, -1)
+        encoder_attention_mask_expand = encoder_attention_mask.unsqueeze(dim=1).\
+            expand(batch_size, insert_l, -1).contiguous().view(batch_size * insert_l, -1)
+        encoder_hidden_expand = encoder_output[0].unsqueeze(dim=1).expand(batch_size, insert_l, encoder_seq_len, -1).\
+            contiguous().view(batch_size * insert_l, encoder_seq_len, -1)  # [b * l, s1]
+        decoder_outputs = self.pretrain_model.decoder(
+            input_ids=seq2gen_tensor,
+            inputs_embeds=None,
+            attention_mask=seq2gen_tensor != self.pad_token_id,
+            encoder_hidden_states=encoder_hidden_expand,
+            encoder_attention_mask=encoder_attention_mask_expand,
+            return_dict=True,
+            output_hidden_states=True,
+        )
+        gen_hidden = decoder_outputs.hidden_states[-1][:, -1]  # [b * s, V]
+        gen_out = self.gen_linear(gen_hidden).argmax(dim=-1)   # [b * insert_l, 1]
+        output_ids = self.phrase_tokenizer.convert_id_arr_to_token_arr(gen_out.contiguous().view(-1))
+        output_ids = [output_ids[index:(index + insert_l)] for index in range(0, len(output_ids), insert_l)]
+        # ==================   gen final ids ======================================
+        final_seqs = self.gen_final_ids(seq_left_arr, output_ids)
+        arr = []
+        for index in range(len(input_ids)):
+            keys = ['input_query', 'gen_query', 'output_query', 'edit_ids']
+            seqs = (self.ids2str(input_ids[index, 190:]), self.ids2str(final_seqs[index]),
+                    self.ids2str(data['query_true'][index]), edit_out[:, 190:].softmax(dim=-1).argmax(dim=-1)[index])
+            arr.append(dict(zip(keys, seqs)))
+        return arr
+
+    def forward(self, data, method='train'):
+        return self.do_edit_gen(data, method)

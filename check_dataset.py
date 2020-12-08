@@ -2,7 +2,7 @@ import torch
 import argparse
 from config_n import Config
 from Model.pretrain_helper import get_model, get_tokenizer
-from dataset.MLDDataset_HRL import MLDDatasetHRL, train_edit_gen_fn, eval_fn
+from dataset.MLDDataset_HRL import MLDDatasetHRL, train_edit_gen_fn
 # from Model.BertMLD import BertMLD
 config = Config()
 
@@ -48,6 +48,36 @@ def check_unk_portion(args):
     print(np.mean(label_arr))
 
 
+def check_sample(args):
+    train_samples = torch.load(args.data_path + f'bert_iter_18.train.pkl')
+    tokenizer, phrase_tokenizer = get_bert_model(args)
+    train_dataset = MLDDatasetHRL(samples=[], tokenizer=tokenizer, phrase_tokenizer=phrase_tokenizer,
+                                  data_type=args.mode)
+    train_dataset.samples = train_samples
+    # train_dataset.load_sample_check()
+    print('')
+    def compare(arr1, arr2):
+        if len(arr1) != len(arr2):
+            return False
+        for i in range(len(arr1)):
+            if arr1[i] != arr2[i]:
+                return False
+        return True
+    filtered_arr = []
+    for tensor in train_dataset.samples['memory']:
+        if not compare(tensor['current_query'], tensor['output_query']):
+            filtered_arr.append(tensor)
+    print(len(filtered_arr) / len(train_samples))
+    print('')
+    # label_arr = []
+    # for tensor in test_dataset.sample_tensor:
+    #     arr = [phrase_id == phrase_tokenizer.unk_token_id for phrase_id in tensor[5] if phrase_id]
+    #     # if True in arr:
+    #     #     print('-')
+    #     label_arr.extend(arr)
+    # print(np.mean(label_arr))
+
+
 if __name__ == '__main__':
     import os
     import random
@@ -72,6 +102,6 @@ if __name__ == '__main__':
     parser.add_argument("--model_name", type=str, default="bertMLD")
     args = parser.parse_args()
     # check_epoch_0()
-    check_unk_portion(args)
-
+    # check_unk_portion(args)
+    check_sample(args)
 
