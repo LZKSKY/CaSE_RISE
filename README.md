@@ -12,7 +12,6 @@ by Zhongkun Liu, Pengjie Ren, Zhumin Chen, Zhaochun Ren, Maarten de Rijke, Ming 
 >   title     = {A Contextual Hierarchical Attention Network with Adaptive Objective
 >                for Dialogue State Tracking},
 >   booktitle = {Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics, {ACL} 2021},
->   pages     = {6322--6333},
 >   year      = {2021}
 > }
 
