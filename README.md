@@ -9,8 +9,7 @@ by Zhongkun Liu, Pengjie Ren, Zhumin Chen, Zhaochun Ren, Maarten de Rijke, Ming 
 >                Zhaochun Ren and
 >                Maarten de Rijke and
 >                Ming Zhou},
->   title     = {A Contextual Hierarchical Attention Network with Adaptive Objective
->                for Dialogue State Tracking},
+>   title     = {Learning to Ask Conversational Questions by Optimizing Levenshtein Distance},
 >   booktitle = {Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics, {ACL} 2021},
 >   year      = {2021}
 > }
