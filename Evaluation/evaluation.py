@@ -36,12 +36,18 @@ def gen_evaluation(hyp_list, ref_list):
             print("%s: %0.6f" % (method, score))
             ret_scores[method] = score
     del scorers
+    return ret_scores
 
 
 def compute_score(file_name, turn_arr: list):
     import torch
     from tqdm import tqdm
-    all_arr = torch.load(file_name)
+    if isinstance(file_name, str):
+        all_arr = torch.load(file_name)
+    elif isinstance(file_name, list):
+        all_arr = file_name
+    else:
+        raise TypeError
     refs, hyps1, hyps2 = [], [], []
     # rank_list = []
     hyps = [[] for i in range(len(turn_arr))]
@@ -51,9 +57,12 @@ def compute_score(file_name, turn_arr: list):
             hyps[index].append(obj['gen_query'][index])
         # hyps2.append(obj['input_query'])
     print('generate score is ')
+    result = []
     for index, t in enumerate(turn_arr):
         print(f'score for turn {t} is: ')
-        gen_evaluation(hyps[index], (refs,))
+        res = gen_evaluation(hyps[index], (refs,))
+        result.append(res)
+    return result
 
 
 def compute_score_mle(file_name):
@@ -69,4 +78,9 @@ def compute_score_mle(file_name):
         hyps.append(obj['gen_query'])
         # hyps2.append(obj['input_query'])
     print('generate score is ')
-    gen_evaluation(hyps, (refs,))
+    res = gen_evaluation(hyps, (refs,))
+    return res
+
+
+
+

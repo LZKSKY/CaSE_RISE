@@ -92,6 +92,11 @@ class TagSeq:
         return trajectory
 
     def merge_path(self, trajectory: List[Tag], desired_len: int):
+        '''
+        :param trajectory:      # [m]
+        :param desired_len:     # [m + 1]
+        :return:
+        '''
         pre_state = 'K'
 
         # change  "DSDKK" -> "SSSKK"

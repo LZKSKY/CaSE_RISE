@@ -8,7 +8,6 @@ def get_bert_tokenizer(tokenizer_path):
     tokenizer = BertTokenizer.from_pretrained(tokenizer_path)
     tokenizer.bos_token = tokenizer.cls_token
     tokenizer.eos_token = tokenizer.sep_token
-    # tokenizer.add_special_tokens(bert_special_tokens_dict)
     return tokenizer
 
 
@@ -20,8 +19,7 @@ def get_bert_model(model_path):
 
 
 def get_bert2bert_model(model_path1, model_path2):
-    from transformers import BertModel, BertConfig, EncoderDecoderModel
-    # config = BertConfig.from_pretrained(model_path1 + 'config.json')
+    from transformers import EncoderDecoderModel
     pretrain_model = EncoderDecoderModel.from_encoder_decoder_pretrained(model_path1, model_path2)
     config = pretrain_model.config
     return pretrain_model, config
@@ -49,8 +47,5 @@ def get_tokenizer(model_path, model_name):
     return tokenizer
 
 
-# from transformers import BertLMHeadModel
-# c = BertLMHeadModel()
-# c.forward()
 
 

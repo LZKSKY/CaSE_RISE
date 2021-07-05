@@ -3,11 +3,13 @@ import os
 import codecs
 from tqdm import tqdm
 import re
+import torch
+# print(os.path.split(sys.path[0]))
+sys.path.append(os.path.split(sys.path[0])[0])
+
 from config_n import Config
 from Preprocess.utils_ import TagSeq
-import torch
-
-config = Config('../../')
+config = Config('../')
 quac_dataset_path = config.quac_dataset_path
 quac_path = config.quac_path
 if not os.path.exists(quac_dataset_path):
@@ -163,62 +165,21 @@ def preprocessing(tokenizer_path, tokenizer_name):
         extend_edit(quac_samples)
         train_samples, dev_samples, test_samples = split_data(quac_path + 'quac.split', quac_samples)
         phrase_tokenizer = build_IS_vocab(train_samples, tokenizer)
+        if not os.path.exists(config.tokenizer_path):
+            os.mkdir(config.tokenizer_path)
         torch.save(phrase_tokenizer, config.tokenizer_path + f'{tokenizer_name}_phrase_tokenizer.pkl')
-        # train_samples = check_duplicate(train_samples)
-        # dev_samples = check_duplicate(dev_samples)
-        # test_samples = check_duplicate(test_samples)
+        train_samples = check_duplicate(train_samples)
+        dev_samples = check_duplicate(dev_samples)
+        test_samples = check_duplicate(test_samples)
         print('data size', len(train_samples), len(dev_samples), len(test_samples))
         torch.save(train_samples, quac_dataset_path + f'{raw_name}.train.pkl')
         torch.save(dev_samples, quac_dataset_path + f'{raw_name}.dev.pkl')
         torch.save(test_samples, quac_dataset_path + f'{raw_name}.test.pkl')
-    # extend_edit(train_samples)
-    # phrase_tokenizer = build_IS_vocab(train_samples, tokenizer)
-    # torch.save(phrase_tokenizer, config.tokenizer_path + f'{raw_name}_phrase_tokenizer.pkl')
-    # extend_edit(dev_samples)
-    # extend_edit(test_samples)
-    # torch.save(train_samples, quac_dataset_path + f'{raw_name}.train.pkl')
-    # torch.save(dev_samples, quac_dataset_path + f'{raw_name}.dev.pkl')
-    # torch.save(test_samples, quac_dataset_path + f'{raw_name}.test.pkl')
     print('processed quac dataset')
 
 
-# def preprocessing_find(tokenizer_path, tokenizer_name):
-#     from Model.pretrain_helper import get_tokenizer
-#     tokenizer = get_tokenizer(tokenizer_path, tokenizer_name)
-#     # tokenizer.add_special_tokens(bert_special_tokens_dict)
-#     raw_name = f'{tokenizer_name}_raw'
-#     # train_samples = torch.load(quac_dataset_path + f'{raw_name}.train.pkl')
-#     # dev_samples = torch.load(quac_dataset_path + f'{raw_name}.dev.pkl')
-#     test_samples = torch.load(quac_dataset_path + f'{raw_name}.test.pkl')
-#
-#     test_samples = extend_edit(test_samples, pad_id=tokenizer.pad_token_id)
-#     torch.save(test_samples, quac_dataset_path + f'{raw_name}.test.pkl')
-#
-#     print('process quac dataset')
-#
-#     # train_samples = check_duplicate(train_samples)
-#     # dev_samples = check_duplicate(dev_samples)
-#     # test_samples = check_duplicate(test_samples)
-#     # # for t in ['gen', 'rank', 'edit']:
-#     # need_list = list(zip(['train', "dev", 'test'], [train_samples, dev_samples, test_samples]))
-#     # for t in ['rank', 'edit_gen', 'eval'][:2]:
-#     #     for s, samples in need_list[:]:
-#     #         dataset = Bert2BertDataset(samples=samples, tokenizer=tokenizer, data_type=t)
-#     #         torch.save(dataset.sample_tensor[:100], quac_dataset_path + f'{tokenizer_name}.{s}.{t}.dataset.pkl')
-#
-#     # new_test_samples = []
-#     # arr = []
-#     # for t in test_samples:
-#     #     if t['query_id'] not in arr:
-#     #         new_test_samples.append(t)
-#     #     arr.append(t['query_id'])
-#     # dataset = CaSEDataset(samples=new_test_samples, tokenizer=tokenizer, data_type='eval')
-#     # torch.save(dataset.sample_tensor, quac_dataset_path + f'case.eval.dataset.pkl')
-
-
 if __name__ == '__main__':
-    preprocessing('../../extra/bert/', 'bert')
-    # preprocessing_find('../../extra/bert/', 'bert')
+    preprocessing('../extra/bert/', 'bert')
 
 
 

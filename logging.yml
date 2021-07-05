@@ -1,0 +1,31 @@
+version: 1
+formatters:
+  simple:
+    format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+handlers:
+  console:
+    class: logging.StreamHandler
+    level: DEBUG
+    formatter: simple
+    stream: ext://sys.stdout
+  console_err:
+    class: logging.StreamHandler
+    level: ERROR
+    formatter: simple
+    stream: ext://sys.stderr
+  file_model:
+    class: logging.handlers.RotatingFileHandler
+    formatter: simple
+    filename: ./log/model.log
+    mode: 'a'
+    maxBytes: 10240
+    backupCount: 5
+    encoding: 'utf-8'
+loggers:
+  model:
+    level: DEBUG
+    handlers: [console, file_model]
+    propagate: no
+root:
+  level: DEBUG
+  handlers: [console_err]

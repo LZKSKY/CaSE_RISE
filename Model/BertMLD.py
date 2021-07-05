@@ -5,7 +5,6 @@ from transformers import EncoderDecoderModel
 from config_n import Config
 import numpy as np
 from Model.utils import pad
-from Model.MLD_gen_helper import generate
 from Model.utils import merge_path
 from Preprocess.PhraseTokenizer import PhraseTokenizer
 from typing import Dict
@@ -25,6 +24,10 @@ class BertMLD(nn.Module):
         self.gen_linear = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size), nn.GELU(),
                                         nn.LayerNorm(self.hidden_size, eps=pretrain_model.decoder.config.layer_norm_eps),
                                         nn.Linear(self.hidden_size, gen_voc_dim))
+        self.score_linear = nn.Sequential(nn.Linear(self.hidden_size, self.hidden_size), nn.GELU(),
+                                          nn.LayerNorm(self.hidden_size,
+                                                       eps=pretrain_model.decoder.config.layer_norm_eps),
+                                          nn.Linear(self.hidden_size, 1))
         self.tokenizer = tokenizer
         self.max_pred_len = 10
         self.pad_token_id = tokenizer.pad_token_id
@@ -105,12 +108,12 @@ class BertMLD(nn.Module):
                 gen_loss = F.nll_loss(gen_out.log_softmax(dim=-1), decoder_label_expand, ignore_index=0,
                                       reduction='none')
                 gen_loss = reward.unsqueeze(dim=1).expand(-1, gen_dim).contiguous().view(-1) * gen_loss
-                gen_loss = gen_loss.sum(dim=0) / (decoder_label_expand > 0).float().sum(dim=0)  # []
+                gen_loss = gen_loss.sum(dim=0) / ((decoder_label_expand > 0).float().sum(dim=0) + 1)  # []
             elif method == 'prob':
                 gen_loss = F.nll_loss(gen_out.log_softmax(dim=-1), decoder_label_expand, ignore_index=0,
                                       reduction='none')
                 # [b]
-                gen_loss = gen_loss.contiguous().view(-1, gen_dim).sum(dim=1) / (decoder_label > 0).float().sum(dim=1)
+                gen_loss = gen_loss.contiguous().view(-1, gen_dim).sum(dim=1) / ((decoder_label > 0).float().sum(dim=1) + 1)
             else:
                 gen_loss = F.nll_loss(gen_out.log_softmax(dim=-1), decoder_label_expand, ignore_index=0,
                                       reduction='mean')     # []
@@ -121,11 +124,17 @@ class BertMLD(nn.Module):
     def do_edit_gen(self, data, method='train', compute_loss=True, **kwargs):
         edit_dict = self.edit_pred(data, compute_loss=compute_loss, method=method)
         gen_dict: Dict = self.seq_predict(data, edit_dict['encoder_output'], compute_loss=compute_loss, method=method)
+
         decoder_label = data['decoder_out_tensor']  # [b, l, s2]
         edit_labels = data['edit_labels_tensor']  # [b, s1]
         decoder_label_expand = decoder_label.contiguous().view(-1)
         reward = data['reward_tensor']
+        if config.use_stopping_score:
+            score_dict: Dict = self.score_predict(edit_dict['encoder_output'], compute_loss=True, reward=reward)
+
         gen_dict.update(edit_dict)
+        if config.use_stopping_score:
+            gen_dict.update(score_dict)
         gen_dict.update({'edit_label': edit_labels, 'gen_label': decoder_label_expand, 'reward': reward})
         return gen_dict
 
@@ -173,8 +182,11 @@ class BertMLD(nn.Module):
             seq2gen_arr.append(seq_gen_i)
             seq_left_arr.append(seq_left_i)
         max_insert_len = max([len(s) for s in seq2gen_arr])
-        seq2gen_arr = [pad(s, [self.pad_token_id] * self.max_pred_len, max_insert_len) for s in seq2gen_arr]
-        return seq_left_arr, seq2gen_arr,
+        if max_insert_len == 0:
+            return seq_left_arr, []
+        else:
+            seq2gen_arr = [pad(s, [self.pad_token_id] * self.max_pred_len, max_insert_len) for s in seq2gen_arr]
+            return seq_left_arr, seq2gen_arr,
 
     def gen_final_ids(self, seq_left_arr, output_ids):
         insert_ids = output_ids
@@ -209,28 +221,37 @@ class BertMLD(nn.Module):
         edit_out, encoder_output = edit_dict['edit_output'], edit_dict['encoder_output']
         # [b, l, s], [b, s]
         seq_left_arr, seq2gen_arr = self.edit2sequence(edit_out[:, 190:], input_ids[:, 190:], encoder_attention_mask[:, 190:])
-        # =================  gen insert ids ========================================
-        seq2gen_tensor = torch.tensor(seq2gen_arr, dtype=input_ids.dtype, device=input_ids.device)
-        gen_data = {'input_token_tensor': input_ids, 'decoder_input_tensor': seq2gen_tensor}
-        gen_dict = self.seq_predict(gen_data, encoder_output, compute_loss=False)
-        gen_out = gen_dict['gen_output']
-        gen_id = gen_out.argmax(dim=-1)     # [b, max_s]
-        output_ids = self.phrase_tokenizer.convert_id_arr_to_token_arr(gen_id.contiguous().view(-1))
-        # [b, max_insert, seq]
-        insert_l = gen_out.size(1)
-        # print(insert_l, len(output_ids), len(seq_left_arr))
-        output_ids = [output_ids[index:(index + insert_l)] for index in range(0, len(output_ids), insert_l)]
-        # ==================   gen final ids ======================================
-        final_seqs = self.gen_final_ids(seq_left_arr, output_ids)   # [b, s]
+        if seq2gen_arr:
+            # =================  gen insert ids ========================================
+            seq2gen_tensor = torch.tensor(seq2gen_arr, dtype=input_ids.dtype, device=input_ids.device)
+            gen_data = {'input_token_tensor': input_ids, 'decoder_input_tensor': seq2gen_tensor}
+            gen_dict = self.seq_predict(gen_data, encoder_output, compute_loss=False)
+            gen_out = gen_dict['gen_output']
+            gen_id = gen_out.argmax(dim=-1)     # [b, max_s]
+            output_ids = self.phrase_tokenizer.convert_id_arr_to_token_arr(gen_id.contiguous().view(-1))
+            # [b, max_insert, seq]
+            insert_l = gen_out.size(1)
+            # print(insert_l, len(output_ids), len(seq_left_arr))
+            output_ids = [output_ids[index:(index + insert_l)] for index in range(0, len(output_ids), insert_l)]
+            # ==================   gen final ids ======================================
+            final_seqs = self.gen_final_ids(seq_left_arr, output_ids)  # [b, s]
+        else:
+            # ==================   gen final ids ======================================
+            final_seqs = seq_left_arr  # [b, s]
+
+        if config.use_stopping_score:
+            score_dict = self.score_predict(encoder_output, compute_loss=False)
+            score = score_dict['score_output'].sigmoid().detach().cpu().numpy()
+
         arr = []
         for index in range(len(input_ids)):
             keys = ['input_query', 'gen_query', 'gen_query_ids', 'edit_ids']
-            seqs = (self.ids2str(input_ids[index, 190:]), self.ids2str(final_seqs[index]), final_seqs[index],
+            seqs = (self.ids2str(input_ids[index, 190:]), self.ids2str(final_seqs[index]), final_seqs[index][1:-1],
                     edit_out[:, 190:].softmax(dim=-1).argmax(dim=-1)[index])
-            arr.append(dict(zip(keys, seqs)))
+            final_dict = dict(zip(keys, seqs))
+            if config.use_stopping_score:
+                final_dict.update({'stopping_score': score[index]})
+            arr.append(final_dict)
+
         return arr
 
-    def generate_edit_gen_mul(self, times):
-        for i in range(1, times + 1):
-            pass
-        pass

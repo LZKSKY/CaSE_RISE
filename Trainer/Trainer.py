@@ -3,7 +3,6 @@ from torch.utils.data import DataLoader
 from torch.nn.utils import clip_grad_norm_
 from tqdm import tqdm
 from time import time
-from Trainer.common import EMA, EarlyStopping
 from config import logger_model as logger
 from config import save_path
 import numpy as np
@@ -32,36 +31,20 @@ class Trainer:
         # self.ema = EMA(self.model, ema_rate)
         # self.ema.register()
         self.save_path = save_path + self.model_name
-        self.earlystopping = EarlyStopping(patience=5, verbose=False, delta=0, path=self.save_path + '-checkpoint.pt',
-                                           trace_func=logger.info)
         if self.optimizer:
             logger.info(f'optimizer lr = {self.optimizer.param_groups[0]["lr"]}, params len {len(self.optimizer.param_groups[0]["params"])}')
 
     def set_init_optimizer(self, lr):
-        # for name, para in self.model.named_parameters():
-        #     para.requires_grad = False
-            # if name[0] != 'h':
-            #     para.requires_grad = True
-            # else:
-            #     para.requires_grad = False
         no_decay = ['bias', 'LayerNorm.weight']
         optimizer_grouped_parameters = [
             {'params': [p for n, p in self.model.named_parameters() if p.requires_grad and not any(nd in n for nd in no_decay)],
              'weight_decay': 0.01},
             {'params': [p for n, p in self.model.named_parameters() if p.requires_grad and any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
         ]
-        # params = filter(lambda x: x.requires_grad, self.model.parameters())
-        # print('-----------------------------------------------------')
-        # print(len(list(params)))
-        # print(len(optimizer_grouped_parameters[0]['params']))
-        # print(len(optimizer_grouped_parameters[1]['params']))
-        # print('-----------------------------------------------------')
         return AdamW(optimizer_grouped_parameters, lr=lr)
 
     def set_optimizer(self, lr, params):
         self.optimizer = AdamW(params, lr=lr)
-        # self.scheduler = get_linear_schedule_with_warmup(self.optimizer, num_warmup_steps=2000,
-        #                                                  num_training_steps=int(model_bp_count) + 100)
         if self.scheduler is not None:
             self.scheduler.optimizer = self.optimizer
         logger.info(f'optimizer lr = {self.optimizer.param_groups[0]["lr"]}, params len {len(self.optimizer.param_groups[0]["params"])}')
@@ -82,7 +65,6 @@ class Trainer:
         if self.accumulation_count % self.accumulation_steps == 0:
             clip_grad_norm_(self.model.parameters(), 1)
             self.optimizer.step()
-            # self.ema.update()
             if self.scheduler is not None:
                 self.scheduler.step()
             self.optimizer.zero_grad()

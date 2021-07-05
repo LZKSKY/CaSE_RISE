@@ -16,10 +16,8 @@ if torch.cuda.is_available():
     torch.cuda.manual_seed_all(seed)
 torch.set_num_threads(4)
 sys.path.append(__file__)
-# print(sys.path)
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-# path = '../../'
 path = '../'
 
 quac_path = f'{path}QuacN/processed/'
@@ -28,12 +26,6 @@ baseline_dataset_path = f'{path}QuacN/BaselineDataset/'
 output_path = f'{path}QuacN/Output/'
 save_path = f'{path}QuacN/model/'
 
-
-# if not os.path.exists(quac_dataset_path):
-#     os.mkdir(quac_dataset_path)
-#
-# if not os.path.exists(baseline_dataset_path):
-#     os.mkdir(baseline_dataset_path)
 
 lif_name = 'lif'
 gpt2_special_tokens_dict = {'sep_token': '[SEP]', 'pad_token': '[PAD]', 'bos_token': '[BOS]', 'eos_token': '[EOS]', 'cls_token': '[CLS]'}
